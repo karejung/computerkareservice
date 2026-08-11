@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# Kept out of the first push rather than deleted: 276MB of superseded tarballs
+# and .blend stages, and 15MB of baked vertex-animation data whose feature was
+# retired (its components live in _to_delete). Nothing in app/ references either.
+# Once binaries are in git history they are painful to remove, so they stay out
+# until they are confirmed dead.
+_to_delete/
+public/vat/
