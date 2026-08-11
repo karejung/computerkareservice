@@ -5,9 +5,10 @@ import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 
+import { asset } from '@/lib/asset';
 import { createFaceRig, type FaceRig } from '@/lib/faceTexture';
 
-const GLB_URL = '/models/kare7.glb';
+const GLB_URL = asset('/models/kare7.glb');
 
 /**
  * The two clips that loop, and the one-shots that move between them.

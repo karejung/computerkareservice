@@ -2,6 +2,8 @@
 
 import dynamic from 'next/dynamic';
 
+import { asset } from '@/lib/asset';
+
 // three.js touches window/WebGL on import, so keep it off the server render.
 const Scene = dynamic(() => import('@/components/Scene'), { ssr: false });
 
@@ -16,7 +18,7 @@ export default function Page() {
       */}
       <img
         className="brand-logo"
-        src="/image/logo.svg"
+        src={asset('/image/logo.svg')}
         alt="kare"
         width={1146}
         height={92}

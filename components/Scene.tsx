@@ -6,12 +6,13 @@ import { OrbitControls, Stage } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
 
+import { asset } from '@/lib/asset';
 import { Kare, type KareHandle, type KareMode } from './Kare';
 import { PuffBurst, type PuffBurstHandle } from './PuffBurst';
 import { StarSpiral, type StarSpiralHandle } from './StarSpiral';
 
-const CURSOR_DEFAULT = { src: '/cursors/cursor.png', x: 3, y: 1 };
-const CURSOR_POINTER = { src: '/cursors/pointer.png', x: 8, y: 0 };
+const CURSOR_DEFAULT = { src: asset('/cursors/cursor.png'), x: 3, y: 1 };
+const CURSOR_POINTER = { src: asset('/cursors/pointer.png'), x: 8, y: 0 };
 const POINTER_TARGET =
   'a, button, [role="button"], input, select, textarea, label, summary, .action-btn';
 
@@ -589,7 +590,7 @@ export default function Scene() {
 
       <div className="action-bar">
         <button type="button" className="action-btn" aria-label="Home">
-          <img src="/image/home.png" alt="" draggable={false} />
+          <img src={asset('/image/home.png')} alt="" draggable={false} />
         </button>
         <button
           type="button"
@@ -597,7 +598,7 @@ export default function Scene() {
           aria-label="V sign"
           onClick={() => kare.current?.playVsign()}
         >
-          <img src="/image/vbutton.png" alt="" draggable={false} />
+          <img src={asset('/image/vbutton.png')} alt="" draggable={false} />
         </button>
         {/*
           Placeholder until the real artwork lands: spins into the ds loop and
@@ -620,7 +621,7 @@ export default function Scene() {
           aria-pressed={faceZoom}
           onClick={() => setFaceZoom((v) => !v)}
         >
-          <img src="/image/cambutton.png" alt="" draggable={false} />
+          <img src={asset('/image/cambutton.png')} alt="" draggable={false} />
         </button>
       </div>
 

@@ -34,43 +34,54 @@ type Particle = {
   /** …and how much of what's left it takes, so they don't land together. */
   span: number;
   size: number;
+  spin: number;
 };
 
 /**
- * A four-point sparkle: soft core, four spikes.
+ * Petal depth in the polar inequality below. 0 gives a plain circle, 0.4 is as
+ * far as the reference pushes it; 0.34 keeps four clear lobes without the waist
+ * pinching down to a cross.
+ */
+const PETAL_Q = 0.34;
+/** Base radius the lobes modulate around. */
+const PETAL_R0 = 0.5;
+
+/**
+ * The sparkle, filled from `r < R0 + q·cos(4θ)`.
  *
- * Drawn rather than shipped as a file — it is a 64px mask, and generating it
- * keeps the shape and the falloff in one place with the material that uses it.
+ * A four-lobed rounded star, straight off the polar form rather than assembled
+ * from quadratic spikes — the curve is continuous all the way round, so the
+ * lobes meet in soft waists instead of the hard notches a hand-built path
+ * leaves at the joins.
+ *
+ * Only the alpha survives: the shader multiplies this by a flat colour, so this
+ * is a silhouette, not artwork.
  */
 function makeStarTexture(): THREE.CanvasTexture {
-  const S = 64;
+  const S = 128;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = S;
   const ctx = canvas.getContext('2d')!;
   const c = S / 2;
+  // Scale so the lobe tips just reach the edge, leaving a pixel for the blur.
+  const scale = (c - 2) / (PETAL_R0 + PETAL_Q);
 
-  const glow = ctx.createRadialGradient(c, c, 0, c, c, c * 0.42);
-  glow.addColorStop(0, 'rgba(255,255,255,1)');
-  glow.addColorStop(0.45, 'rgba(255,255,255,0.5)');
-  glow.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, S, S);
-
-  // Spikes as four thin kites meeting at the centre.
-  ctx.fillStyle = 'rgba(255,255,255,0.95)';
-  const long = c * 0.98;
-  const wide = c * 0.13;
-  for (let i = 0; i < 4; i++) {
-    ctx.save();
-    ctx.translate(c, c);
-    ctx.rotate((i * Math.PI) / 2);
-    ctx.beginPath();
-    ctx.moveTo(0, -long);
-    ctx.quadraticCurveTo(wide, -wide, 0, 0);
-    ctx.quadraticCurveTo(-wide, -wide, 0, -long);
-    ctx.fill();
-    ctx.restore();
+  const STEPS = 256;
+  ctx.beginPath();
+  for (let i = 0; i <= STEPS; i++) {
+    const t = (i / STEPS) * Math.PI * 2;
+    const r = (PETAL_R0 + PETAL_Q * Math.cos(4 * t)) * scale;
+    const x = c + Math.cos(t) * r;
+    const y = c + Math.sin(t) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
   }
+  ctx.closePath();
+  // Just enough blur to take the stair-stepping off; the shape stays crisp.
+  ctx.filter = 'blur(0.8px)';
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.filter = 'none';
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
@@ -80,10 +91,13 @@ function makeStarTexture(): THREE.CanvasTexture {
 const VERT = /* glsl */ `
   attribute float aAlpha;
   attribute float aSize;
+  attribute float aRot;
   uniform float uPixelRatio;
   varying float vAlpha;
+  varying float vRot;
   void main() {
     vAlpha = aAlpha;
+    vRot = aRot;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     // Perspective falloff so a star keeps its world size as the camera moves,
     // times the device ratio — gl_PointSize is in framebuffer pixels, so on a
@@ -97,9 +111,14 @@ const FRAG = /* glsl */ `
   uniform sampler2D uMap;
   uniform vec3 uColor;
   varying float vAlpha;
+  varying float vRot;
   void main() {
     if (vAlpha <= 0.002) discard;
-    vec4 tex = texture2D(uMap, gl_PointCoord);
+    // Spin the lookup: points cannot be rotated, but the sample can, and a
+    // four-fold shape at one fixed angle reads as the same stamp 160 times.
+    vec2 p = gl_PointCoord - 0.5;
+    float s = sin(vRot), c = cos(vRot);
+    vec4 tex = texture2D(uMap, vec2(p.x * c - p.y * s, p.x * s + p.y * c) + 0.5);
     // Straight alpha, not additive: the page clears to #ccc and the floor is
     // lighter still, and adding light to an almost-white background is a
     // change of a few percent — which is why the first pass read as nothing.
@@ -156,6 +175,7 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
         delay,
         span: 0.45 + rnd() * (1 - delay) * 0.55,
         size: 0.16 + rnd() * 0.34,
+        spin: rnd() * Math.PI * 2,
       };
     });
   }, []);
@@ -167,6 +187,10 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
     g.setAttribute(
       'aSize',
       new THREE.BufferAttribute(Float32Array.from(particles.map((p) => p.size)), 1),
+    );
+    g.setAttribute(
+      'aRot',
+      new THREE.BufferAttribute(Float32Array.from(particles.map((p) => p.spin)), 1),
     );
     // Fixed bounds: the positions churn every frame and three would otherwise
     // want to recompute a sphere for them, and an all-zero buffer between
