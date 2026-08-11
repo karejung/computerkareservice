@@ -38,66 +38,36 @@ type Particle = {
 };
 
 /**
- * Petal depth in the polar inequality below. 0 gives a plain circle, 0.4 is as
- * far as the reference pushes it; 0.34 keeps four clear lobes without the waist
- * pinching down to a cross.
- */
-const PETAL_Q = 0.34;
-/** Base radius the lobes modulate around. */
-const PETAL_R0 = 0.5;
-
-/**
- * The sparkle, filled from `r < R0 + q·cos(4θ)`.
+ * The sparkle is the polar inequality `r < R0 + q·cos(4θ)`, unioned with a
+ * plain disc.
  *
- * A four-lobed rounded star, straight off the polar form rather than assembled
- * from quadratic spikes — the curve is continuous all the way round, so the
- * lobes meet in soft waists instead of the hard notches a hand-built path
- * leaves at the joins.
+ * q is what animates. At 0 the inequality is just a circle of R0; pushed to
+ * QMAX the four lobes reach R0+q while the 45° waists pinch in to R0−q, so the
+ * shape blooms outward and narrows into a star at the same time. The disc sits
+ * underneath and stops those waists closing to nothing — that is the "circle
+ * plus flower" read, and it is why one equation was never going to be enough.
  *
- * Only the alpha survives: the shader multiplies this by a flat colour, so this
- * is a silhouette, not artwork.
+ * Evaluated in the fragment shader rather than baked: a texture would fix q,
+ * and q changing is the whole effect.
  */
-function makeStarTexture(): THREE.CanvasTexture {
-  const S = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = S;
-  const ctx = canvas.getContext('2d')!;
-  const c = S / 2;
-  // Scale so the lobe tips just reach the edge, leaving a pixel for the blur.
-  const scale = (c - 2) / (PETAL_R0 + PETAL_Q);
-
-  const STEPS = 256;
-  ctx.beginPath();
-  for (let i = 0; i <= STEPS; i++) {
-    const t = (i / STEPS) * Math.PI * 2;
-    const r = (PETAL_R0 + PETAL_Q * Math.cos(4 * t)) * scale;
-    const x = c + Math.cos(t) * r;
-    const y = c + Math.sin(t) * r;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  // Just enough blur to take the stair-stepping off; the shape stays crisp.
-  ctx.filter = 'blur(0.8px)';
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.filter = 'none';
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  return texture;
-}
+const R0 = 0.5;
+const QMAX = 0.4;
+/** Radius of the disc under the petals, as a fraction of R0. */
+const CORE = 0.62;
 
 const VERT = /* glsl */ `
   attribute float aAlpha;
   attribute float aSize;
   attribute float aRot;
+  attribute float aQ;
   uniform float uPixelRatio;
   varying float vAlpha;
   varying float vRot;
+  varying float vQ;
   void main() {
     vAlpha = aAlpha;
     vRot = aRot;
+    vQ = aQ;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     // Perspective falloff so a star keeps its world size as the camera moves,
     // times the device ratio — gl_PointSize is in framebuffer pixels, so on a
@@ -108,21 +78,41 @@ const VERT = /* glsl */ `
 `;
 
 const FRAG = /* glsl */ `
-  uniform sampler2D uMap;
   uniform vec3 uColor;
   varying float vAlpha;
   varying float vRot;
+  varying float vQ;
+
+  const float R0 = 0.5;
+  const float QMAX = 0.4;
+  const float CORE = 0.62;
+
   void main() {
     if (vAlpha <= 0.002) discard;
-    // Spin the lookup: points cannot be rotated, but the sample can, and a
-    // four-fold shape at one fixed angle reads as the same stamp 160 times.
+
     vec2 p = gl_PointCoord - 0.5;
+    // Turn the sample, not the quad: points cannot rotate, and a four-fold
+    // shape at one fixed angle reads as the same stamp every time.
     float s = sin(vRot), c = cos(vRot);
-    vec4 tex = texture2D(uMap, vec2(p.x * c - p.y * s, p.x * s + p.y * c) + 0.5);
+    p = vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+
+    // Put the quad edge at the widest the shape can ever be, so a blooming
+    // lobe grows into space that is already there instead of being clipped.
+    float r = length(p) * 2.0 * (R0 + QMAX);
+    float theta = atan(p.y, p.x);
+
+    float petals = R0 + vQ * cos(4.0 * theta);
+    float edge = max(petals, R0 * CORE);
+
+    // fwidth keeps the rim one pixel wide however close the camera gets.
+    float w = fwidth(r) * 1.2;
+    float mask = 1.0 - smoothstep(edge - w, edge + w, r);
+    if (mask <= 0.002) discard;
+
     // Straight alpha, not additive: the page clears to #ccc and the floor is
     // lighter still, and adding light to an almost-white background is a
     // change of a few percent — which is why the first pass read as nothing.
-    gl_FragColor = vec4(uColor, tex.a * vAlpha);
+    gl_FragColor = vec4(uColor, mask * vAlpha);
   }
 `;
 
@@ -153,7 +143,6 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
   ref,
 ) {
   const clock = useRef({ time: 0, life: 0 });
-  const texture = useMemo(makeStarTexture, []);
 
   const particles = useMemo<Particle[]>(() => {
     // Deterministic so a reload looks the same; Math.random would make every
@@ -192,6 +181,7 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
       'aRot',
       new THREE.BufferAttribute(Float32Array.from(particles.map((p) => p.spin)), 1),
     );
+    g.setAttribute('aQ', new THREE.BufferAttribute(new Float32Array(COUNT), 1));
     // Fixed bounds: the positions churn every frame and three would otherwise
     // want to recompute a sphere for them, and an all-zero buffer between
     // bursts would frustum-cull the whole thing on the frame it starts.
@@ -203,7 +193,6 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
     () =>
       new THREE.ShaderMaterial({
         uniforms: {
-          uMap: { value: texture },
           uColor: { value: new THREE.Color(color) },
           uPixelRatio: { value: 1 },
         },
@@ -212,7 +201,7 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
         transparent: true,
         depthWrite: false,
       }),
-    [texture, color],
+    [color],
   );
 
   useEffect(() => {
@@ -223,9 +212,8 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
     () => () => {
       geometry.dispose();
       material.dispose();
-      texture.dispose();
     },
-    [geometry, material, texture],
+    [geometry, material],
   );
 
   useImperativeHandle(ref, () => ({
@@ -244,6 +232,7 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
     c.time += dt;
     const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
     const alpha = geometry.getAttribute('aAlpha') as THREE.BufferAttribute;
+    const petal = geometry.getAttribute('aQ') as THREE.BufferAttribute;
     const t = c.time / c.life;
 
     for (let i = 0; i < COUNT; i++) {
@@ -254,6 +243,8 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
         alpha.setX(i, 0);
         continue;
       }
+      // Opens out of a circle, peaks as a star around mid-flight, closes again.
+      petal.setX(i, QMAX * Math.sin(Math.PI * u) ** 0.7);
       const rise = easeOut(u);
       const a = p.angle + p.dir * p.turns * Math.PI * 2 * rise;
       // Bulge outward on the way up, then draw back in as it fades.
@@ -265,6 +256,7 @@ export const StarSpiral = forwardRef<StarSpiralHandle, StarSpiralProps>(function
 
     pos.needsUpdate = true;
     alpha.needsUpdate = true;
+    petal.needsUpdate = true;
 
     if (c.time >= c.life) {
       c.life = 0;
