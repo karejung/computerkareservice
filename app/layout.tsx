@@ -4,11 +4,11 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'computer.kare.service',
   description:
-    'A Blender scene played back in WebGL: skeletal animation for the body, a vertex animation texture for the baked cloth simulation.',
+    'A Blender scene played back in WebGL: KARE, animated from named glTF clips, with a Nintendo DS, a laptop and a phone to pick between.',
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0b0c0e',
+  themeColor: '#e7e7e7',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
