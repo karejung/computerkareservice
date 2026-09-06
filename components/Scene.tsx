@@ -2,12 +2,14 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, Stage } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
 
 import { asset } from '@/lib/asset';
 import { Kare, type KareHandle, type KareMode } from './Kare';
+import { Inventory, type InventoryHandle } from './Inventory';
+import { Bloom } from './Bloom';
 import { PuffBurst, type PuffBurstHandle } from './PuffBurst';
 import { StarSpiral, type StarSpiralHandle } from './StarSpiral';
 
@@ -16,10 +18,6 @@ const CURSOR_POINTER = { src: asset('/cursors/pointer.png'), x: 8, y: 0 };
 const POINTER_TARGET =
   'a, button, [role="button"], input, select, textarea, label, summary, .action-btn';
 
-/**
- * CSS `cursor: url(...)` keeps getting stomped (or rejected) on the canvas.
- * Draw the cursor ourselves so OrbitControls can't touch it.
- */
 function CustomCursor() {
   const img = useRef<HTMLImageElement>(null);
 
@@ -65,49 +63,37 @@ function CustomCursor() {
   );
 }
 
-type Preset = 'rembrandt' | 'portrait' | 'upfront' | 'soft';
-type EnvPreset =
-  | 'city' | 'studio' | 'apartment' | 'dawn' | 'sunset'
-  | 'night' | 'warehouse' | 'forest' | 'park' | 'lobby';
-
 type Look = {
-  contactShadow: boolean;
-  intensity: number;
-  preset: Preset;
-  environment: EnvPreset;
-  /** The two checker squares on the floor disc. */
   background: string;
   background2: string;
-  /** Edge length of one square, in world units. */
   checkerSize: number;
-  /** Emissive on the hair, pants and shoes. */
   emissive: string;
-  /** Shadow tone on the white parts; the lit side is always #ffffff. */
   shadeColor: string;
-  /** Where the terminator falls, as a normal-facing threshold (-1..1). */
   shadeSplit: number;
-  /** Direction the fake shadow is cast from, in degrees. */
   shadeAngle: number;
   shadeHeight: number;
-  /** Head tracking limits at the edge of the window, in radians. */
   headYaw: number;
   headPitch: number;
+
+  bloom: boolean;
+  bloomStrength: number;
+  bloomRadius: number;
+  bloomThreshold: number;
 };
 
 type CameraShot = {
-  /** Look-at point. */
   target: THREE.Vector3;
-  /** Unit vector from target to camera. */
   dir: THREE.Vector3;
   distance: number;
   minDistance: number;
   maxDistance: number;
 };
 
-/** Default view: from the character's right, mild elevation. */
 const BODY_DIR = new THREE.Vector3(-0.45, 0.12, 1).normalize();
 
-/** Must match <OrbitControls> — face zoom tips to the upper (frontal) limit. */
+const FACE_FILL = 2.6;
+const FACE_DROP = 0.3;
+
 const MIN_POLAR = 0.2;
 const MAX_POLAR = Math.PI / 2 - 0.02;
 
@@ -115,44 +101,32 @@ const GREY = '#e0e0e0';
 const WHITE = '#ffffff';
 const BLACK = '#377cf6';
 
-/** Edge length of one checker square, in world units. */
 const CHECKER_SIZE = 0.5;
-/** Squares baked into the texture before it tiles. */
 const CHECKER_CELLS = 16;
-/** World-space diameter of the pin-lit checker disc under the character. */
 const FLOOR_SIZE = 2.8;
 
-/** Matches Kare's name normalisation for looking up the face mesh. */
 const nodeKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 const FACE_NODE = nodeKey('FACE');
 const HEAD_NODE = nodeKey('mixamorig:Head');
 
-const DEFAULT_LOOK: Look = {
-  contactShadow: false,
-  intensity: 1.0,
-  preset: 'rembrandt',
-  environment: 'city',
+const LOOK: Look = {
   background: GREY,
   background2: WHITE,
   checkerSize: CHECKER_SIZE,
   emissive: BLACK,
-  shadeColor: '#eeeeee',
+  shadeColor: '#dedede',
   shadeSplit: 0.05,
-  shadeAngle: 55,
-  shadeHeight: 32,
+  shadeAngle: 44,
+  shadeHeight: 30,
   headYaw: 0.4,
-  headPitch: 0.18,
+  headPitch: 0.1,
+
+  bloom: true,
+  bloomStrength: 0.03,
+  bloomRadius: 0.1,
+  bloomThreshold: 0.9,
 };
 
-/**
- * World-space bounds of the model *as currently posed*.
- *
- * Box3.setFromObject reads each geometry's rest bounding box, which for this
- * rig is a standing Mixamo T-pose — but the clip seats the character, so those
- * bounds are both too tall and in the wrong place. Skinning a sample of the
- * vertices by hand gives bounds that match what is actually on screen, which is
- * what the camera fit depends on.
- */
 function posedBounds(root: THREE.Object3D): THREE.Box3 {
   const box = new THREE.Box3();
   const v = new THREE.Vector3();
@@ -166,7 +140,7 @@ function posedBounds(root: THREE.Object3D): THREE.Box3 {
     if (!position) return;
 
     const skinned = mesh as THREE.SkinnedMesh;
-    // A few thousand samples is plenty to bound a character.
+
     const step = Math.max(1, Math.floor(position.count / 1500));
     for (let i = 0; i < position.count; i += step) {
       v.fromBufferAttribute(position, i);
@@ -178,14 +152,6 @@ function posedBounds(root: THREE.Object3D): THREE.Box3 {
   return box;
 }
 
-/**
- * Drops the model onto y=0 and frames it, once, after the first pose has been
- * applied. Stage's own centering and `adjustCamera` are both off: it centers
- * the model *through* the origin and drives the camera through <Bounds>, which
- * fights OrbitControls for the same target.
- *
- * Also parks the checker disc under the character's footprint.
- */
 function GroundAndFit({
   group,
   floor,
@@ -199,10 +165,21 @@ function GroundAndFit({
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
   const frame = useRef(0);
   const done = useRef(false);
+  const tallest = useRef(0);
+  const settled = useRef(0);
+
+  useEffect(() => {
+    if (!controls) return;
+    const yield_ = () => {
+      done.current = true;
+    };
+    controls.addEventListener('start', yield_);
+    return () => controls.removeEventListener('start', yield_);
+  }, [controls]);
 
   useFrame(() => {
     if (done.current || !group.current || !controls) return;
-    // Let the mixer pose the skeleton before measuring it.
+
     if (frame.current++ < 3) return;
 
     let box = posedBounds(group.current);
@@ -211,11 +188,20 @@ function GroundAndFit({
     const extent = box.getSize(new THREE.Vector3());
     if (extent.y < 1e-4) return;
 
-    done.current = true;
+    // Keep fitting until the measurement stops growing. The first frames that
+    // have a mesh in them can still be measuring a skeleton the mixer has not
+    // posed yet, and a fit taken then locks the camera in far too close.
+    if (extent.y > tallest.current * 1.01) {
+      tallest.current = extent.y;
+      settled.current = 0;
+    } else if (++settled.current > 20 || frame.current > 150) {
+      done.current = true;
+    }
 
-    // Feet on the floor.
-    group.current.position.y -= box.min.y;
-    group.current.updateMatrixWorld(true);
+    if (Math.abs(box.min.y) > 1e-4) {
+      group.current.position.y -= box.min.y;
+      group.current.updateMatrixWorld(true);
+    }
 
     box = posedBounds(group.current);
     const center = box.getCenter(new THREE.Vector3());
@@ -224,14 +210,11 @@ function GroundAndFit({
       floor.current.position.set(center.x, -0.004, center.z);
     }
 
-    // Perspective framing is distance: back off far enough that the taller of
-    // the two fits, whichever that is at the current aspect.
     const halfFov = (camera.fov * Math.PI) / 180 / 2;
     const fitHeight = extent.y / 2 / Math.tan(halfFov);
     const fitWidth = extent.x / 2 / Math.tan(halfFov) / camera.aspect;
     const distance = Math.max(fitHeight, fitWidth) * 1.35;
 
-    // From the character's right (negative X) so the right cheek faces the lens.
     const dir = BODY_DIR;
     camera.position.copy(center).addScaledVector(dir, distance);
     camera.near = distance / 200;
@@ -243,7 +226,6 @@ function GroundAndFit({
     controls.maxDistance = distance * 5;
     controls.update();
 
-    // Remember the full-body framing so the face button can return here.
     home.current = {
       target: center.clone(),
       dir: dir.clone(),
@@ -256,7 +238,6 @@ function GroundAndFit({
   return null;
 }
 
-/** Ease camera.position / controls.target toward a face crop or back home. */
 function CameraFocus({
   group,
   home,
@@ -277,9 +258,12 @@ function CameraFocus({
 
     if (!face) {
       goalTarget.current.copy(home.current.target);
+      const dir = camera.position.clone().sub(controls.target);
+      if (dir.lengthSq() < 1e-8) dir.copy(home.current.dir);
+      else dir.normalize();
       goalPos.current
         .copy(home.current.target)
-        .addScaledVector(home.current.dir, home.current.distance);
+        .addScaledVector(dir, home.current.distance);
       controls.minDistance = home.current.minDistance;
       controls.maxDistance = home.current.maxDistance;
     } else {
@@ -301,15 +285,21 @@ function CameraFocus({
         : box.getSize(new THREE.Vector3());
       const halfFov = (camera.fov * Math.PI) / 180 / 2;
       const fit = Math.max(extent.x, extent.y, 0.12) / 2 / Math.tan(halfFov);
-      const distance = fit * 2.1;
+      const distance = fit * FACE_FILL;
 
-      // Same viewing angle — just pull in so the face sits in the middle.
+      goalTarget.current.y -= extent.y * FACE_DROP;
+
       const dir = camera.position.clone().sub(controls.target).normalize();
       goalPos.current.copy(goalTarget.current).addScaledVector(dir, distance);
 
       controls.minDistance = Math.min(home.current.minDistance, distance * 0.5);
       controls.maxDistance = home.current.maxDistance;
     }
+
+    const damped = controls.enableDamping;
+    controls.enableDamping = false;
+    controls.update();
+    controls.enableDamping = damped;
 
     controls.enabled = false;
     moving.current = true;
@@ -334,10 +324,6 @@ function CameraFocus({
   return null;
 }
 
-/**
- * Procedural checker texture — generated at 16×16 cells and then tiled, which
- * keeps mipmapping useful (a literal 2×2 texture aliases badly into the distance).
- */
 function useCheckerTexture(a: string, b: string): THREE.Texture {
   const gl = useThree((s) => s.gl);
   return useMemo(() => {
@@ -364,20 +350,18 @@ function useCheckerTexture(a: string, b: string): THREE.Texture {
   }, [gl, a, b]);
 }
 
-/**
- * Checker disc under the character with a soft radial falloff — pin-lit pool
- * against the solid page background showing through the transparent canvas.
- */
 function Floor({
   a,
   b,
   cell,
   meshRef,
+  visible = true,
 }: {
   a: string;
   b: string;
   cell: number;
   meshRef: React.RefObject<THREE.Mesh | null>;
+  visible?: boolean;
 }) {
   const texture = useCheckerTexture(a, b);
 
@@ -387,14 +371,14 @@ function Floor({
         uMap: { value: texture },
         uRepeat: { value: new THREE.Vector2(1, 1) },
       },
-      vertexShader: /* glsl */ `
+      vertexShader:`
         varying vec2 vUv;
         void main() {
           vUv = uv;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
-      fragmentShader: /* glsl */ `
+      fragmentShader:`
         uniform sampler2D uMap;
         uniform vec2 uRepeat;
         varying vec2 vUv;
@@ -418,9 +402,10 @@ function Floor({
   }, [material, cell]);
 
   return (
-    // A hair below y=0 so it never z-fights Stage's contact shadow plane.
+
     <mesh
       ref={meshRef}
+      visible={visible}
       rotation={[-Math.PI / 2, 0, 0]}
       position={[0, -0.004, 0]}
       material={material}
@@ -430,147 +415,91 @@ function Floor({
   );
 }
 
-/** lil-gui panel. Lives outside the Canvas (it is DOM), imported dynamically. */
-function LookPanel({ initial, onChange }: { initial: Look; onChange: (next: Look) => void }) {
-  useEffect(() => {
-    let gui: { destroy: () => void } | null = null;
-    let disposed = false;
-
-    // lil-gui mutates this object in place; mirror each edit into React state
-    // so <Stage> re-renders with the new look.
-    const state = { ...initial };
-
-    import('lil-gui').then(({ default: GUI }) => {
-      if (disposed) return;
-      const g = new GUI({ title: 'kare' });
-      gui = g;
-      // Hidden for now — look defaults still apply; reopen with g.show().
-      g.hide();
-
-      const push = () => onChange({ ...state });
-
-      g.addColor(state, 'background').name('checker 1').onChange(push);
-      g.addColor(state, 'background2').name('checker 2').onChange(push);
-      g.add(state, 'checkerSize', 0.05, 4, 0.05).name('checker size').onChange(push);
-      g.addColor(state, 'emissive').name('model color').onChange(push);
-      /*
-       * A drawn shadow, not a lit one — the scene lights have no say in it, so
-       * the lit side stays exactly #ffffff whatever the rig is doing.
-       */
-      g.addColor(state, 'shadeColor').name('shade color').onChange(push);
-      // How much of the surface the shadow covers: higher eats further in.
-      g.add(state, 'shadeSplit', -1, 1, 0.01).name('shade amount').onChange(push);
-      g.add(state, 'shadeAngle', 0, 360, 1).name('shade angle').onChange(push);
-      g.add(state, 'shadeHeight', -60, 89, 1).name('shade height').onChange(push);
-
-      // Signed, so a negative value flips the direction the head follows.
-      g.add(state, 'headYaw', -0.8, 0.8, 0.01).name('head turn').onChange(push);
-      g.add(state, 'headPitch', -0.6, 0.6, 0.01).name('head tilt').onChange(push);
-
-      g.add(state, 'contactShadow').name('contactShadow').onChange(push);
-      g.add(state, 'intensity', 0, 3, 0.05).name('light intensity').onChange(push);
-      g.add(state, 'preset', ['rembrandt', 'portrait', 'upfront', 'soft'])
-        .name('preset')
-        .onChange(push);
-      g.add(state, 'environment', [
-        'city', 'studio', 'apartment', 'dawn', 'sunset',
-        'night', 'warehouse', 'forest', 'park', 'lobby',
-      ])
-        .name('environment')
-        .onChange(push);
-    });
-
-    return () => {
-      disposed = true;
-      gui?.destroy();
-    };
-    // Mount once — the panel owns its copy of the state from then on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return null;
-}
-
 export default function Scene() {
-  const [look, setLook] = useState<Look>(DEFAULT_LOOK);
   const [faceZoom, setFaceZoom] = useState(false);
   const model = useRef<THREE.Group>(null);
   const floor = useRef<THREE.Mesh>(null);
   const kare = useRef<KareHandle>(null);
   const home = useRef<CameraShot | null>(null);
-  // Which loop the character is resting in, so the ds button can show its state.
+
   const [mode, setMode] = useState<KareMode>('idle');
   const puff = useRef<PuffBurstHandle>(null);
   const stars = useRef<StarSpiralHandle>(null);
+  const [wanted, setWanted] = useState<KareMode>('idle');
+  const inventory = useRef<InventoryHandle>(null);
+  const [busy, setBusy] = useState(false);
+
+  const pendingAction = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (mode !== wanted) {
+      kare.current?.setMode(wanted);
+      return;
+    }
+    setBusy(false);
+    const act = pendingAction.current;
+    if (act) {
+      pendingAction.current = null;
+      act();
+    }
+  }, [mode, wanted]);
+
+  const goEmpty = (then: () => void) => {
+    if (busy) return;
+    inventory.current?.toEmpty();
+    if (mode === 'idle') {
+      then();
+      return;
+    }
+    setBusy(true);
+    pendingAction.current = then;
+
+    setWanted('idle');
+  };
+
+  const onArrow = (by: number) => {
+    if (busy) return;
+    setBusy(true);
+    inventory.current?.step(by);
+  };
 
   return (
     <div className="scene-root">
       <Canvas
-        shadows
-        // `flat` switches tone mapping off. r3f defaults to ACES, which is for
-        // photographic input — it desaturates and darkens the flat emissive
-        // colours this model is authored in, so the hair rendered as something
-        // other than the #377CF6 it was given, and the ink (composited after
-        // tone mapping, so untouched by it) could never line up with it.
+
         flat
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: false }}
         camera={{ position: [-2, 1.4, 3], fov: 35, near: 0.01, far: 500 }}
-        /*
-         * Clear to the page grey (#ccc). The brand logo sits above the canvas
-         * with mix-blend-mode: difference — an alpha-0 clear would read as
-         * black and break the invert, so the empty frame has to be opaque.
-         */
         onCreated={({ gl }) => gl.setClearColor(0xcccccc, 1)}
       >
         <Suspense fallback={null}>
-          {/*
-            Stage supplies the three-point rig plus IBL. Keyed on the look so
-            switching preset/environment rebuilds it cleanly.
-          */}
-          <Stage
-            key={`${look.preset}-${look.environment}-${look.contactShadow}`}
-            intensity={look.intensity}
-            preset={look.preset}
-            environment={look.environment}
-            shadows={look.contactShadow ? { type: 'contact', opacity: 0.6, blur: 2.5 } : false}
-            adjustCamera={false}
-            center={{ disable: true }}
-          >
-            <group ref={model}>
-              <Kare
-                ref={kare}
-                emissive={look.emissive}
-                shadeColor={look.shadeColor}
-                shadeSplit={look.shadeSplit}
-                shadeAngle={look.shadeAngle}
-                shadeHeight={look.shadeHeight}
-                headYaw={look.headYaw}
-                headPitch={look.headPitch}
-                onModeChange={setMode}
-                onPoof={(at) => puff.current?.burst(at)}
-                onSpin={(seconds) => stars.current?.burst(seconds)}
-              />
-              {/*
-                Inside the model group so it rides the drop to y=0 that
-                GroundAndFit applies. Points are not meshes, so the fit's
-                bounds pass ignores them and the framing is unaffected.
-              */}
-              <StarSpiral ref={stars} color={look.emissive} />
-            </group>
-          </Stage>
+          <ambientLight intensity={1} />
+          <group ref={model}>
+            <Kare
+              ref={kare}
+              emissive={LOOK.emissive}
+              shadeColor={LOOK.shadeColor}
+              shadeSplit={LOOK.shadeSplit}
+              shadeAngle={LOOK.shadeAngle}
+              shadeHeight={LOOK.shadeHeight}
+              headYaw={LOOK.headYaw}
+              headPitch={LOOK.headPitch}
+              onModeChange={setMode}
+              onSpin={(seconds) => stars.current?.burst(seconds)}
+              onPuff={(at, radius, stars) => puff.current?.burst(at, radius, stars)}
+              onSparkle={(at) => puff.current?.sparkle(at)}
+            />
+            <StarSpiral ref={stars} />
+          </group>
         </Suspense>
 
-        {/*
-          Outside the model group and given a world-space point by Kare, so no
-          part of the fit or the ground drop has to be undone to place it.
-        */}
         <PuffBurst ref={puff} />
 
         <Floor
-          a={look.background}
-          b={look.background2}
-          cell={look.checkerSize}
+          a={LOOK.background}
+          b={LOOK.background2}
+          cell={LOOK.checkerSize}
           meshRef={floor}
         />
 
@@ -584,48 +513,52 @@ export default function Scene() {
         />
         <GroundAndFit group={model} floor={floor} home={home} />
         <CameraFocus group={model} home={home} face={faceZoom} />
+
+        <Bloom
+          enabled={LOOK.bloom}
+          strength={LOOK.bloomStrength}
+          radius={LOOK.bloomRadius}
+          threshold={LOOK.bloomThreshold}
+        />
       </Canvas>
 
       <CustomCursor />
 
       <div className="action-bar">
-        <button type="button" className="action-btn" aria-label="Home">
-          <img src={asset('/image/home.png')} alt="" draggable={false} />
-        </button>
         <button
           type="button"
           className="action-btn"
           aria-label="V sign"
-          onClick={() => kare.current?.playVsign()}
+          onClick={() => goEmpty(() => kare.current?.playVsign())}
         >
           <img src={asset('/image/vbutton.png')} alt="" draggable={false} />
-        </button>
-        {/*
-          Placeholder until the real artwork lands: spins into the ds loop and
-          spins back out again. Text rather than an <img> so it is obvious this
-          one is not finished.
-        */}
-        <button
-          type="button"
-          className="action-btn action-btn--placeholder"
-          aria-label={mode === 'ds' ? 'Stop playing' : 'Play ds'}
-          aria-pressed={mode === 'ds'}
-          onClick={() => kare.current?.toggleDs()}
-        >
-          DS
         </button>
         <button
           type="button"
           className="action-btn"
           aria-label={faceZoom ? 'Full body' : 'Face zoom'}
           aria-pressed={faceZoom}
-          onClick={() => setFaceZoom((v) => !v)}
+          onClick={() => goEmpty(() => setFaceZoom((v) => !v))}
         >
           <img src={asset('/image/cambutton.png')} alt="" draggable={false} />
         </button>
       </div>
 
-      <LookPanel initial={DEFAULT_LOOK} onChange={setLook} />
+      <Inventory
+        ref={inventory}
+        held={mode !== 'idle'}
+        busy={busy}
+        onArrow={onArrow}
+        onSettled={() => {
+          if (mode === wanted) setBusy(false);
+        }}
+        onSelect={(kind) => setWanted(kind === 'unknown' ? 'idle' : kind)}
+        shadeColor={LOOK.shadeColor}
+        shadeSplit={LOOK.shadeSplit}
+        shadeAngle={LOOK.shadeAngle}
+        shadeHeight={LOOK.shadeHeight}
+      />
+
     </div>
   );
 }

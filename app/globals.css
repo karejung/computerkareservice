@@ -1,11 +1,20 @@
 :root {
   --bg: #ccc;
+  --page: #e7e7e7;
   --fg: #1b1c1f;
   --fg-dim: #6d7076;
   --accent: #2b6ef5;
   --line: rgba(27, 28, 31, 0.16);
 
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+
+  --round: 50px;
+  --gutter: 24px;
+
+  --deck-bar: #201d1a;
+  --deck-dim: #b6b0a8;
+  --deck-blue: #377cf6;
 }
 
 * {
@@ -29,16 +38,38 @@ body {
   overflow: hidden;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
-  background: var(--bg);
+  background: var(--page);
 }
 
-/* ---------------------------------------------------------------- 3d layer */
-
-.scene-root {
+.split {
   position: fixed;
   inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+  gap: var(--gutter);
+  padding: var(--gutter);
+  background: var(--page);
+}
+
+.split__stage {
+  grid-column: 1;
+  grid-row: 1;
+  margin: calc(var(--gutter) * -1);
+  margin-right: 0;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--bg);
+  container-type: size;
+}
+
+.scene-root {
+  position: absolute;
+  inset: 0;
   z-index: 2;
-  /* orbit-dragging across the page would otherwise paint a text selection */
+  --ui: clamp(40px, min(calc(34cqw - 24px), calc(36cqh - 50px)), 168px);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -49,7 +80,6 @@ body {
   background: transparent;
 }
 
-/* DOM cursor — OrbitControls / CSS url() can't steal this. */
 .custom-cursor {
   position: fixed;
   top: 0;
@@ -64,31 +94,15 @@ body {
   will-change: transform;
 }
 
-/* ---------------------------------------------------------------- brand */
-
-.brand-logo {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  width: min(560px, 72vw);
-  height: auto;
-  z-index: 3;
-  transform: translateX(-50%);
-  pointer-events: none;
-  /* Difference against the canvas below — character and clear colour alike. */
-  mix-blend-mode: difference;
-}
-
-/* ---------------------------------------------------------------- actions */
-
 .action-bar {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
+  position: absolute;
+  left: calc(var(--ui) * 0.167);
+  top: 50%;
   z-index: 5;
   display: flex;
-  gap: 16px;
-  transform: translateX(-50%);
+  flex-direction: column;
+  gap: calc(var(--ui) * 0.095);
+  transform: translateY(-50%);
 }
 
 .action-btn {
@@ -96,8 +110,8 @@ body {
   padding: 0;
   border: 0;
   background: transparent;
-  width: 72px;
-  height: 72px;
+  width: calc(var(--ui) * 0.43);
+  height: calc(var(--ui) * 0.43);
   line-height: 0;
 }
 
@@ -118,23 +132,364 @@ body {
   transform: scale(0.94);
 }
 
-/*
-  Stand-in for the ds button until its artwork exists. Sized to the image
-  buttons so the bar keeps its rhythm, and deliberately plain so it reads as
-  unfinished rather than as a design decision.
-*/
-.action-btn--placeholder {
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  font: 600 18px/1 system-ui, sans-serif;
-  letter-spacing: 0.04em;
-  color: #333;
-  opacity: 0.55;
+.inventory {
+  --cell: var(--ui);
+  --gap: calc(var(--ui) * 0.06);
+  --view: calc(var(--cell) * 2.8);
+  --aside: 0.6;
+  --aside-fade: 0.32;
+
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--ui) * 0.167);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.action-btn--placeholder[aria-pressed='true'] {
-  background: #333;
-  color: #fff;
+.inventory__defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.inventory__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.inventory__arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  margin: 0;
+  padding: 0 0 3px;
+  border: 0;
+  width: calc(var(--cell) * 0.21);
+  height: calc(var(--cell) * 0.21);
+  background: transparent;
+  color: var(--fg);
+  font: 400 calc(var(--cell) * 0.13) / 1 var(--font-ui);
+  transform: translateY(-50%);
+  transition: opacity 140ms ease;
+}
+
+.inventory__arrow-orb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.inventory__arrow-glyph {
+  position: relative;
+  z-index: 1;
+  display: block;
+  transform: translateY(-5.6%);
+}
+
+.inventory__arrow.is-prev {
+  right: calc(50% + var(--cell) / 2 + var(--cell) * 0.048);
+}
+
+.inventory__arrow.is-next {
+  left: calc(50% + var(--cell) / 2 + var(--cell) * 0.048);
+}
+
+.inventory__arrow:hover:not(:disabled) .inventory__arrow-orb {
+  filter: brightness(1.06);
+}
+
+.inventory__arrow:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.94);
+}
+
+.inventory__arrow:disabled {
+  opacity: 0.22;
+}
+
+.inventory__viewport {
+  position: relative;
+  width: var(--view);
+  height: var(--cell);
+  overflow: hidden;
+}
+
+.inventory__track {
+  position: absolute;
+  inset: 0;
+  transform: translateX(calc(var(--slide) * (var(--cell) + var(--gap))));
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.inventory__track.is-jumped {
+  transition: none;
+}
+
+.inventory__cell {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--cell);
+  height: 100%;
+  margin-left: calc(var(--cell) / -2);
+  transform: translateX(calc(var(--d) * (var(--cell) + var(--gap))));
+}
+
+.inventory__lift {
+  width: 100%;
+  height: 100%;
+  opacity: var(--aside-fade);
+  transform: scale(var(--aside));
+  pointer-events: none;
+  transition:
+    opacity 300ms ease,
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.inventory__lift.is-center {
   opacity: 1;
-  filter: none;
+  transform: none;
+  pointer-events: auto;
+}
+
+.inventory__unknown {
+  display: grid;
+  place-items: center;
+}
+
+.inventory__mark {
+  width: calc(var(--cell) * 0.42);
+  height: auto;
+  transform: translateX(6%);
+  filter:
+    drop-shadow(0 0 calc(var(--cell) * 0.015) rgba(255, 255, 255, 0.95))
+    drop-shadow(0 0 calc(var(--cell) * 0.05) rgba(255, 255, 255, 0.6));
+  pointer-events: none;
+  user-select: none;
+}
+
+.inventory__mark-edge path {
+  fill: #ffffff;
+  stroke: #ffffff;
+  stroke-width: 34;
+  stroke-linejoin: round;
+}
+
+.inventory__mark-body path {
+  fill: #9a9ca1;
+}
+
+.inventory__mark-inner path {
+  fill: none;
+  stroke: #377cf6;
+  stroke-width: 22;
+  opacity: 0.3;
+  filter: blur(4px);
+}
+
+.inventory__slot {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--cell);
+  height: var(--cell);
+  margin-left: calc(var(--cell) / -2);
+}
+
+.inventory__ground {
+  position: absolute;
+  inset: 0;
+  clip-path: url(#inventory-squircle);
+  opacity: 0.7;
+  pointer-events: none;
+  user-select: none;
+}
+
+.inventory__ground-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(30deg) scale(2);
+}
+
+.inventory__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 8;
+  clip-path: url(#inventory-squircle);
+  vector-effect: non-scaling-stroke;
+  transition:
+    fill 140ms ease,
+    stroke 140ms ease;
+}
+
+.inventory__inner {
+  fill: none;
+  stroke: #377cf6;
+  stroke-width: 24;
+  opacity: 0.14;
+  filter: blur(5px);
+}
+
+.inventory__item {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  clip-path: url(#inventory-squircle);
+}
+
+.inventory__canvas {
+  pointer-events: none;
+}
+
+.deck {
+  --tab-round: 26px;
+  --notch: 24px;
+
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.deck__tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 0 34px 0 calc(var(--round) + var(--notch));
+}
+
+.deck__tab {
+  position: relative;
+  margin: 0;
+  border: 0;
+  padding: 18px clamp(14px, 2.2vw, 30px);
+  background: transparent;
+  border-radius: var(--tab-round) var(--tab-round) 0 0;
+  font: 800 clamp(12px, 1.1vw, 15px) / 1 var(--font-ui);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  transition: color 140ms ease;
+}
+
+.deck__tab:hover {
+  color: var(--fg);
+}
+
+.deck__tab.is-active {
+  background: var(--deck-blue);
+  color: #10131a;
+}
+
+.deck__tab.is-active::before,
+.deck__tab.is-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: var(--notch);
+  height: var(--notch);
+  background: var(--deck-blue);
+}
+
+.deck__tab.is-active::before {
+  left: calc(var(--notch) * -1);
+  -webkit-mask-image: radial-gradient(circle var(--notch) at 0 0, #0000 98%, #000 100%);
+  mask-image: radial-gradient(circle var(--notch) at 0 0, #0000 98%, #000 100%);
+}
+
+.deck__tab.is-active::after {
+  right: calc(var(--notch) * -1);
+  -webkit-mask-image: radial-gradient(circle var(--notch) at 100% 0, #0000 98%, #000 100%);
+  mask-image: radial-gradient(circle var(--notch) at 100% 0, #0000 98%, #000 100%);
+}
+
+.deck__tab:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: -6px;
+}
+
+.deck__sheet {
+  flex: 1;
+  min-height: 0;
+  padding: 22px;
+  border-radius: var(--round);
+  background: var(--deck-blue);
+}
+
+.deck__page {
+  height: 100%;
+  padding: 48px;
+  overflow: auto;
+  border-radius: var(--round);
+  background: #fff;
+}
+
+.deck__title {
+  margin: 0;
+  font: 800 clamp(28px, 3.4vw, 44px) / 1 var(--font-ui);
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+
+  .split.is-open {
+    grid-template-rows: 1fr 1fr;
+  }
+
+  .split__stage {
+    grid-column: 1;
+    grid-row: 1;
+    margin: calc(var(--gutter) * -1);
+    margin-bottom: 0;
+    border-radius: 0;
+  }
+
+  .deck {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .deck__sheet {
+    display: none;
+  }
+
+  .split.is-open .deck__sheet {
+    display: block;
+  }
+}
+
+@media (max-width: 560px) {
+  .split {
+    --round: 32px;
+  }
+
+  .deck {
+    --notch: 18px;
+    --tab-round: 18px;
+  }
 }

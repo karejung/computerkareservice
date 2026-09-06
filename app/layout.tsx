@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'KARE — realtime cloth in the browser',
+  title: 'computer.kare.service',
   description:
     'A Blender scene played back in WebGL: skeletal animation for the body, a vertex animation texture for the baked cloth simulation.',
 };

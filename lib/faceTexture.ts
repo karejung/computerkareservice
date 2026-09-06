@@ -1,22 +1,13 @@
 import * as THREE from 'three';
 
-/**
- * Live face texture: face.svg의 path들을 2048x2048 캔버스에 그려서
- * face.png 대신 쓰는 CanvasTexture를 만든다.
- *
- * - 눈동자(iris+pupil)가 시선 타겟을 따라 움직이고 (pupil은 패럴랙스로 더 많이),
- * - 눈꺼풀은 피벗선 기준 세로 반전 베지어 모핑으로 깜빡인다.
- *
- * face-demo(웹 데모)와 동일한 로직. 텍스처 좌표계는 원본 face.png와 같으므로
- * flipY=false(glTF 규약) 그대로 UV가 맞는다.
- */
-
 const SIZE = 2048;
 
 const PATH_D = {
   face: 'M1444.47 1818.51L1031.96 1925.74L613.5 1816.94C609.3 1815.85 605.75 1811.57 603.18 1808.91L581.04 1785.95L559.92 1764.07L529.84 1733.13L503.64 1706.35L481.05 1682.95L459.92 1661.07L429.84 1630.13L402.68 1602.35L383.06 1581.83C380.89 1579.56 376.73 1576.19 375.86 1573.07L362 1522.91C360.8 1518.59 359 1515.01 355.84 1511.06L298.14 1565.4C291.1 1567.51 283.45 1567 276.03 1567.47L261.02 1568.42C256.29 1568.72 251.84 1568.08 248.38 1564.41L181.12 1492.99C176.06 1487.62 170.96 1482.88 167.39 1476.37L126.52 1297.03L109.94 1138.08C109.46 1133.45 109.2 1129.86 112.58 1126.54L139.89 1099.76L200.55 1039.66C216.33 1024.03 217.12 1027.71 233.95 1026.43C241.16 1025.88 248.77 1024.38 256.06 1026.16C262.73 1027.78 267.87 1034.48 274.02 1038C278.65 1035.42 278.74 1029.95 278.46 1024.93L277.21 1001.99L276.26 981.92L275.22 959.99L274.27 939.92L273.23 917.99L272.27 897.92L271.22 875.99L270.26 855.93L269.38 833.9C269.12 827.34 266.92 819.88 269.06 812.91L414.73 338.04C417.09 333.8 420.31 332.16 424.79 330.47L1031.95 101.53L1638.45 330.21C1642.98 331.92 1646.25 333.28 1649 337.43L1794.91 812.92C1796.96 819.61 1794.88 826.61 1794.62 832.91L1793.73 854.93L1792.77 874.99L1791.72 896.92L1790.76 916.99L1789.72 938.92L1788.76 958.99L1787.75 979.99L1786.74 1000.95L1786.04 1016.07L1785.31 1029.88C1785.23 1031.45 1786.9 1035.01 1787.57 1036.46C1789.89 1041.49 1798.78 1028.97 1807.21 1026.38C1814.47 1024.14 1822.5 1025.84 1830.05 1026.49C1836.19 1027.02 1844.81 1025.32 1850.19 1028.83C1856.9 1033.2 1862.57 1038.98 1868.36 1044.71L1928.55 1104.28L1951.87 1127.1C1954.96 1130.13 1954.41 1133.71 1953.97 1137.93L1937.38 1296.98L1896.36 1477.09L1876.05 1500.12L1816.06 1563.88C1812.38 1567.79 1808.15 1568.77 1802.91 1568.42L1787.93 1567.41C1780.91 1566.94 1773.18 1568.03 1766.72 1565.27C1762.78 1563.58 1759.7 1559.25 1756.35 1556.59L1710.13 1512.9C1709.68 1512.51 1707.82 1511.16 1707.49 1511.65L1705.86 1514.01C1703.93 1516.8 1702.73 1520.18 1701.78 1523.6L1688.11 1573.04C1687.18 1576.39 1682.77 1579.87 1680.43 1582.31L1658.83 1604.83L1632.15 1632.11L1602.07 1663.05L1580.95 1684.93L1558.84 1707.82L1533.15 1734.11L1502.08 1766.04L1480.96 1787.93L1458.97 1810.85C1454.94 1815.05 1450.98 1816.79 1444.47 1818.48V1818.51Z',
   irisR: 'M1489.96 1150.51C1492.79 1243.77 1442.52 1320.03 1361.8 1321.04C1281.07 1322.05 1226.21 1247.1 1223.38 1153.83C1220.54 1060.57 1277.92 984.222 1351.54 983.303C1425.15 982.384 1487.13 1057.24 1489.96 1150.51Z',
   pupilR: 'M1400.26 1091.08C1401.3 1125.29 1384.88 1153.23 1358.36 1153.56C1331.84 1153.89 1313.73 1126.38 1312.69 1092.17C1311.65 1057.97 1330.41 1029.99 1354.59 1029.69C1378.78 1029.39 1399.22 1056.87 1400.26 1091.08Z',
+
+  winkR: 'M170 67.1905L49 91L162.5 110L154.903 156.519L0 101.054V80.5277L184 0L170 67.1905Z',
   eyelidR: 'M1255.31 1041.92C1281.56 999.293 1328.23 958.397 1410.18 965.129C1468.25 969.898 1510.71 993.965 1538.66 1016.84C1552.64 1028.28 1562.99 1039.42 1569.83 1047.7C1573.26 1051.83 1575.81 1055.25 1577.5 1057.64C1578.34 1058.83 1578.97 1059.76 1579.39 1060.39C1579.6 1060.7 1579.76 1060.95 1579.86 1061.11C1579.91 1061.19 1579.95 1061.25 1579.97 1061.29C1579.99 1061.31 1580 1061.32 1580 1061.33C1580 1061.34 1580.01 1061.34 1580.01 1061.34C1580.01 1061.34 1580.01 1061.34 1580.01 1061.34L1580.01 1061.34L1580.38 1061.95L1581.08 1061.83L1676.39 1045.36L1538.37 1218.55C1538.41 1217.28 1538.45 1215.64 1538.46 1213.69C1538.5 1208.53 1538.39 1201.13 1537.78 1192.15C1536.58 1174.2 1533.42 1149.95 1525.57 1124.76C1509.88 1074.37 1475.41 1020.07 1400.37 1005.15C1362.92 997.703 1332.95 1001.67 1309.06 1011.87C1285.19 1022.07 1267.46 1038.46 1254.45 1055.75C1242.49 1071.65 1234.5 1088.32 1229.36 1101.69C1229.38 1101.61 1229.4 1101.54 1229.42 1101.46C1234.16 1085.02 1242.17 1063.25 1255.31 1041.92Z',
   eyebrowR: 'M1331.47 772.437C1398.46 729.537 1489.9 707.768 1605.35 743.228L1593.61 781.435C1489.55 749.473 1410.26 769.439 1353.03 806.096C1294.98 843.274 1258.54 898.371 1243.07 937.088L1205.95 922.254C1224 877.099 1265.3 814.817 1331.47 772.437Z',
   irisL: 'M574.275 1150.51C571.442 1243.77 621.711 1320.03 702.437 1321.04C783.163 1322.04 838.026 1247.1 840.859 1153.83C843.692 1060.57 786.312 984.221 712.697 983.302C639.081 982.383 577.108 1057.24 574.275 1150.51Z',
@@ -28,35 +19,38 @@ const PATH_D = {
 type PartName = keyof typeof PATH_D;
 
 const FACE_FILL = '#ffffff';
-/** 눈·눈꺼풀·눈썹 기본 잉크 색. setInk로 모델 색과 함께 움직인다. */
 const INK = '#000000';
 
-// 눈 중심 (iris 타원 바운딩 박스 중심)
 const EYE_R = { cx: 1356.7, cy: 1152.2 };
 const EYE_L = { cx: 707.6, cy: 1152.2 };
-const LOOK_RANGE = { x: 33, y: 24 }; // iris 최대 이동량 (px)
-const PUPIL_EXTRA = 0.35; // pupil은 iris보다 35% 더 움직임 (패럴랙스)
-const LID_PIVOT_Y = 1060; // 눈꺼풀 모핑 기준선 (세로 반전 피벗)
-// 눈구멍 마스크 (face.svg의 ellipse mask와 동일)
+const LOOK_RANGE = { x: 33, y: 24 };
+const PUPIL_EXTRA = 0.35;
+const LID_PIVOT_Y = 1060;
+
 const SOCKET_R = { cx: 1389, cy: 1169.5, rx: 171, ry: 202.5 };
 const SOCKET_L = { cx: 675, cy: 1169.5, rx: 171, ry: 202.5 };
 
-const BLINK_DUR = 240; // ms
+const BLINK_DUR = 240;
 const LOOK_SMOOTHING = 0.12;
+const LID_DROP = 95;
+
+const WINK_W = 184;
+const WINK_H = 157;
+const WINK_SPREAD = 32;
+const WINK_SCALE = 1.859;
+const WINK_IN = 0.45;
+const WINK_OUT = 0.14;
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
 const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
 
 export interface FaceRig {
   texture: THREE.CanvasTexture;
-  /** 시선 타겟, 화면 정규화 좌표 [-1, 1] (x: 좌→우, y: 상→하) */
   setLookTarget(nx: number, ny: number): void;
-  /** 눈·눈꺼풀·눈썹의 잉크 색 (기본 검정) */
   setInk(color: string): void;
-  /** 정면 응시로 복귀 */
   resetLook(): void;
   triggerBlink(): void;
-  /** 매 프레임 호출 — 상태가 바뀐 프레임에만 캔버스를 다시 그린다 */
+  setWink(on: boolean): void;
   update(): void;
   dispose(): void;
 }
@@ -73,14 +67,15 @@ export function createFaceRig(): FaceRig {
   }
 
   const texture = new THREE.CanvasTexture(canvas);
-  texture.flipY = false; // glTF UV 규약 — 원본 face.png와 동일한 방향
+  texture.flipY = false;
   texture.colorSpace = THREE.SRGBColorSpace;
 
   const look = { x: 0, y: 0, tx: 0, ty: 0 };
   let blinkT0 = -1;
   let nextBlink = performance.now() + 1500;
+  let wink = 0;
+  let winkTarget = 0;
   let ink = INK;
-  /** 잉크 색이 바뀐 프레임에는 변화 감지를 건너뛰고 무조건 다시 그린다. */
   let dirty = true;
 
   function blinkValue(now: number): number {
@@ -89,31 +84,31 @@ export function createFaceRig(): FaceRig {
     const t = (now - blinkT0) / BLINK_DUR;
     if (t >= 1) {
       blinkT0 = -1;
-      // 20% 확률로 곧바로 한 번 더 (더블 블링크)
+
       nextBlink = now + (Math.random() < 0.2 ? 300 : 1800 + Math.random() * 3500);
       return 1;
     }
     return t < 0.4 ? 1 - smooth(t / 0.4) : smooth((t - 0.4) / 0.6);
   }
 
-  function drawFace(lookX: number, lookY: number, blink: number) {
+  function drawFace(lookX: number, lookY: number, blink: number, winkAmt: number) {
     ctx.clearRect(0, 0, SIZE, SIZE);
 
     ctx.fillStyle = FACE_FILL;
     ctx.fill(parts.face);
 
     for (const eye of [
-      { c: EYE_R, socket: SOCKET_R, iris: 'irisR', pupil: 'pupilR', lid: 'eyelidR', brow: 'eyebrowR' },
-      { c: EYE_L, socket: SOCKET_L, iris: 'irisL', pupil: 'pupilL', lid: 'eyelidL', brow: 'eyebrowL' },
+      { c: EYE_R, socket: SOCKET_R, iris: 'irisR', pupil: 'pupilR', lid: 'eyelidR', brow: 'eyebrowR', mirror: false },
+      { c: EYE_L, socket: SOCKET_L, iris: 'irisL', pupil: 'pupilL', lid: 'eyelidL', brow: 'eyebrowL', mirror: true },
     ] as const) {
       const { cx, cy } = eye.c;
-      const b = Math.max(blink, 0.02);
 
-      // 눈알(iris+pupil): 깜빡임은 눈 중심 기준 세로 스케일, 시선은 translate.
-      // 거의 감았을 땐 눈꺼풀 뒤로 완전히 숨김
-      if (blink > 0.12) {
+      const open = blink * (1 - winkAmt);
+      const b = Math.max(open, 0.02);
+
+      if (open > 0.12) {
         ctx.save();
-        // 눈구멍 마스크: 눈동자가 이동해도 socket 타원 밖으로 나가지 않음
+
         ctx.beginPath();
         ctx.ellipse(eye.socket.cx, eye.socket.cy, eye.socket.rx, eye.socket.ry, 0, 0, Math.PI * 2);
         ctx.clip();
@@ -123,37 +118,47 @@ export function createFaceRig(): FaceRig {
         ctx.translate(lookX, lookY);
         ctx.fillStyle = ink;
         ctx.fill(parts[eye.iris]);
-        // pupil은 iris보다 PUPIL_EXTRA만큼 더 이동 (입체감)
+
         ctx.translate(lookX * PUPIL_EXTRA, lookY * PUPIL_EXTRA);
         ctx.fillStyle = 'white';
         ctx.fill(parts[eye.pupil]);
         ctx.restore();
       }
 
-      // 눈꺼풀: 위로 볼록(뜬 눈) ↔ 아래로 볼록(감은 눈) 곡선 모핑.
-      // LID_PIVOT_Y 기준으로 세로 스케일을 1 → -0.85로 뒤집으면 베지어 제어점이
-      // 전부 반전되면서 곡선 방향이 바뀌고, 중간값에서는 곡선이 펴진다.
-      const flip = -0.85 + 1.85 * blink;
+      const flip = -0.85 + 1.85 * open;
       const lidS = Math.abs(flip) < 0.04 ? (flip < 0 ? -0.04 : 0.04) : flip;
-      ctx.save();
-      ctx.translate(0, (1 - blink) * 95); // 시선에는 반응하지 않고 깜빡임에만 움직임
-      ctx.translate(0, LID_PIVOT_Y);
-      ctx.scale(1, lidS);
-      ctx.translate(0, -LID_PIVOT_Y);
-      ctx.fillStyle = ink;
-      ctx.fill(parts[eye.lid]);
-      ctx.restore();
+      if (winkAmt < 0.999) {
+        ctx.save();
+        ctx.globalAlpha = 1 - winkAmt;
+        ctx.translate(0, (1 - open) * LID_DROP);
+        ctx.translate(0, LID_PIVOT_Y);
+        ctx.scale(1, lidS);
+        ctx.translate(0, -LID_PIVOT_Y);
+        ctx.fillStyle = ink;
+        ctx.fill(parts[eye.lid]);
+        ctx.restore();
+      }
 
-      // 눈썹: 깜빡일 때 살짝만 내려옴, 시선을 약하게 따라감
+      if (winkAmt > 0.001) {
+        ctx.save();
+        ctx.globalAlpha = winkAmt;
+        ctx.translate(cx + WINK_SPREAD * (eye.mirror ? -1 : 1), cy);
+        ctx.scale(WINK_SCALE * (eye.mirror ? -1 : 1), WINK_SCALE);
+        ctx.translate(-WINK_W / 2, -WINK_H / 2);
+        ctx.fillStyle = ink;
+        ctx.fill(parts.winkR);
+        ctx.restore();
+      }
+
       ctx.save();
-      ctx.translate(lookX * 0.25, lookY * 0.35 + (1 - blink) * 38);
+      ctx.translate(lookX * 0.25, lookY * 0.35 + (1 - open) * 38);
       ctx.fillStyle = ink;
       ctx.fill(parts[eye.brow]);
       ctx.restore();
     }
   }
 
-  const last = { x: NaN, y: NaN, blink: NaN };
+  const last = { x: NaN, y: NaN, blink: NaN, wink: NaN };
 
   return {
     texture,
@@ -178,17 +183,23 @@ export function createFaceRig(): FaceRig {
       nextBlink = performance.now();
     },
 
+    setWink(on: boolean) {
+      winkTarget = on ? 1 : 0;
+    },
+
     update() {
       look.x += (look.tx - look.x) * LOOK_SMOOTHING;
       look.y += (look.ty - look.y) * LOOK_SMOOTHING;
       const blink = blinkValue(performance.now());
+      wink += (winkTarget - wink) * (winkTarget > wink ? WINK_IN : WINK_OUT);
+      if (Math.abs(winkTarget - wink) < 0.002) wink = winkTarget;
 
-      // 변화가 없으면 2048² 캔버스 리드로우 + GPU 업로드를 건너뜀
       if (
         !dirty &&
         Math.abs(look.x - last.x) < 0.05 &&
         Math.abs(look.y - last.y) < 0.05 &&
-        blink === last.blink
+        blink === last.blink &&
+        wink === last.wink
       ) {
         return;
       }
@@ -196,8 +207,9 @@ export function createFaceRig(): FaceRig {
       last.x = look.x;
       last.y = look.y;
       last.blink = blink;
+      last.wink = wink;
 
-      drawFace(look.x, look.y, blink);
+      drawFace(look.x, look.y, blink, wink);
       texture.needsUpdate = true;
     },
 
