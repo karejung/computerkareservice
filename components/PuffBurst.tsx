@@ -204,6 +204,7 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
   { tint = '#ffffff' },
   ref,
 ) {
+  const group = useRef<THREE.Group>(null);
   const clock = useRef({ time: 0, live: false, smoke: true, stars: true, reach: 1 });
   const origin = useRef(new THREE.Vector3());
   const texture = useMemo(makePuffTexture, []);
@@ -358,6 +359,13 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
     starMaterial.uniforms.uPixelRatio.value = state.gl.getPixelRatio();
 
     const c = clock.current;
+    /*
+     * Off the scene entirely between bursts. `aSize` keeps whatever the last
+     * burst left in it, so the points carry on rasterising at full sprite size
+     * every frame and discarding in the fragment shader — the discard is free
+     * but the coverage is not, and these sprites are hundreds of pixels across.
+     */
+    if (group.current) group.current.visible = c.live;
     if (!c.live) return;
     c.time += dt;
 
@@ -372,6 +380,9 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
       const u = (t - p.delay) / (1 - p.delay);
       if (!c.smoke || u <= 0 || u >= 1) {
         alpha.setX(i, 0);
+        // Zero the size too, so a sparkle — which runs stars without smoke —
+        // does not spend a live burst rasterising 20 stale full-size quads.
+        size.setX(i, 0);
         continue;
       }
       const out = easeOut(u) * p.reach * c.reach;
@@ -435,7 +446,7 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
   });
 
   return (
-    <group>
+    <group ref={group} visible={false}>
       <points geometry={geometry} material={material} frustumCulled={false} renderOrder={10} />
       <points geometry={starGeometry} material={starMaterial} frustumCulled={false} />
     </group>

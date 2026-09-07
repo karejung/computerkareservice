@@ -8,3 +8,6 @@ next-env.d.ts
 
 _to_delete/
 public/vat/
+
+# local asset backups, not part of the build
+tools/backup/

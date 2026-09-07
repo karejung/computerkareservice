@@ -1,5 +1,6 @@
 :root {
-  --bg: #ccc;
+  /* The 3D canvas. Must match CANVAS_BG in components/Scene.tsx, which is
+     what the renderer actually clears to. */
   --page: #e7e7e7;
   --fg: #1b1c1f;
   --fg-dim: #6d7076;
@@ -10,7 +11,17 @@
   --font-ui: ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
 
   --round: 50px;
-  --gutter: 24px;
+  --gutter: 20px;
+
+  /* Two ramps, not one. The page and the 3D canvas share --sky-*, read off
+     :root by components/Scene.tsx as well as by the rules below; the inventory
+     slot keeps its own lighter --ground-* so it still reads as a lit tile
+     against them. --pattern is that slot's checkers; nothing else uses it. */
+  --sky-pale: #d5d7db;
+  --sky-deep: #b4b5b8;
+  --ground-top: #d5d7db;
+  --ground-bottom: #ffffff;
+  --pattern: url("data:image/svg+xml,%3Csvg width='54' height='54' viewBox='0 0 54 54' fill='none' xmlns='http://www.w3.org/2000/svg'%3E %3Crect width='27' height='27' fill='%23D5D7DB'/%3E %3Crect x='27' y='27' width='27' height='27' fill='%23D5D7DB'/%3E %3Crect x='27' width='27' height='27' fill='%23ECEEF1'/%3E %3Crect y='27' width='27' height='27' fill='%23ECEEF1'/%3E %3C/svg%3E");
 
   --deck-bar: #201d1a;
   --deck-dim: #b6b0a8;
@@ -19,6 +30,17 @@
 
 * {
   box-sizing: border-box;
+}
+
+/*
+ * Registered only so it computes to a real length. components/Stage reads --ui
+ * to size the canvas corner to the inventory tile; an unregistered custom
+ * property hands back the raw clamp() text instead of pixels.
+ */
+@property --ui {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
 }
 
 html,
@@ -38,8 +60,18 @@ body {
   overflow: hidden;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
-  background: var(--page);
 }
+
+/*
+ * The page ground, matching the inventory slot: gradient underneath, checkers
+ * over it. Only html gets a background — a background on body would paint over
+ * this one, since html having its own stops body's from propagating up.
+ */
+html {
+  background-color: var(--sky-pale);
+  background-image: linear-gradient(to bottom, var(--sky-deep), var(--sky-pale));
+}
+
 
 .split {
   position: fixed;
@@ -49,35 +81,285 @@ body {
   grid-template-rows: 1fr;
   gap: var(--gutter);
   padding: var(--gutter);
-  background: var(--page);
+  /* Transparent so the page ground shows through the gutter around the stage. */
+  background: transparent;
 }
 
 .split__stage {
   grid-column: 1;
   grid-row: 1;
-  margin: calc(var(--gutter) * -1);
-  margin-right: 0;
+  /* Inset by .split's padding on every side, rather than bleeding off three of
+     them the way it used to — the canvas is a card now, not a full-bleed panel. */
+  margin: 0;
   min-width: 0;
   position: relative;
   overflow: hidden;
-  border-radius: 0;
-  background: var(--bg);
+  /* No background and no rounding of its own: the two tiers inside are the
+     cards now, and this is only what sizes them and anchors --ui's container
+     query. */
+  background: transparent;
   container-type: size;
 }
 
+/*
+ * One occupant. The second column is for the deck; with no deck there is
+ * nothing to gutter against, so the column and the gap go and the stage spans
+ * the whole grid.
+ *
+ * `.split`'s padding deliberately stays — that is the inset from the browser
+ * edge, and the stage no longer cancels it with negative margins the way it
+ * did when it was meant to bleed. Wide, not full-bleed.
+ *
+ * Written as a modifier rather than by editing the rules above, so restoring
+ * the deck is a matter of dropping one class.
+ */
+.split.is-solo {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  gap: 0;
+}
+
+
+/*
+ * Two tiers: the avatar takes the upper row and the tray gets a row of its own
+ * underneath, so the canvas stops where the inventory starts instead of running
+ * behind it.
+ */
 .scene-root {
   position: absolute;
   inset: 0;
   z-index: 2;
   --ui: clamp(40px, min(calc(34cqw - 24px), calc(36cqh - 50px)), 168px);
+  display: grid;
+  /*
+   * minmax(0, ...) on both axes, not 1fr/auto. Without an explicit column the
+   * implicit one is `auto`, which sizes to max-content — and the canvas carries
+   * an intrinsic width from its drawing buffer, so the track grew past the card
+   * and `overflow: hidden` sheared the right-hand side off. A plain `1fr` has
+   * the same floor of min-content and fails the same way.
+   */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--gutter);
   user-select: none;
   -webkit-user-select: none;
 }
+
+/*
+ * min-height: 0, or the canvas's intrinsic height wins the `1fr` argument and
+ * pushes the tray off the bottom. The action bar is absolute against this
+ * rather than .scene-root, so it centres on the avatar and ignores the tray.
+ */
+.scene-root__view {
+  position: relative;
+  /* Belt and braces with the minmax above: a grid item's automatic minimum is
+     its min-content size unless it is told otherwise. */
+  min-width: 0;
+  min-height: 0;
+  /* Matches CANVAS_BG in components/Scene.tsx — what the canvas clears to. */
+  background: #d5d7db;
+}
+
 
 .scene-root canvas {
   display: block;
   touch-action: none;
   background: transparent;
+}
+
+.squircle-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/*
+ * Hiding the real cursor only makes sense where there is one to hide. A phone
+ * has no pointer to stand in for, and `cursor: none` there would strand anyone
+ * who later attaches a mouse with no cursor at all — so both halves of the
+ * swap are undone together.
+ */
+@media (hover: none), (pointer: coarse) {
+  html,
+  body,
+  html *,
+  .scene-root,
+  .scene-root canvas {
+    cursor: auto !important;
+  }
+
+  .custom-cursor {
+    display: none;
+  }
+}
+
+/*
+ * Stickers. Fixed over the page — above the canvas card, below the cursor —
+ * with the layer itself transparent to the pointer so only the stickers
+ * catch a drag and OrbitControls keeps the gaps between them.
+ */
+.stickers {
+  /*
+   * Spans are a fraction of vmin, and on a phone vmin is the short side — so
+   * the same fraction that reads well on a desktop comes out as a thumbnail
+   * there. Scaled up under the breakpoint rather than re-authored per sticker,
+   * to keep their relative sizes.
+   */
+  --sticker-scale: 1;
+
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+@media (max-width: 700px) {
+  .stickers {
+    --sticker-scale: 1.75;
+  }
+}
+
+/*
+ * The hologram is a port of DongGukMon/TiltHologramCard, which draws it in
+ * Skia. Every piece it uses has a CSS counterpart, so the layer stack, the
+ * colours and the stop positions below are that component's, not an
+ * approximation of it:
+ *
+ *   perspective(500px) + rotateX/rotateY, clamped to 15°
+ *   a rainbow ramp, masked by a moving light band, composited in `overlay`
+ *   a second, weaker light band straight over the top
+ *
+ * The one liberty is the pattern: the reference masks with a holo_background
+ * PNG, and this uses a fine repeating stripe instead, blended into the rainbow.
+ */
+.sticker {
+  --lift: drop-shadow(0 2px 1px rgba(27, 28, 31, 0.18))
+    drop-shadow(0 10px 14px rgba(27, 28, 31, 0.2));
+  /* Both bands run the same way; only their origin moves. */
+  --sweep: 135deg;
+
+  position: absolute;
+  width: calc(var(--span) * var(--sticker-scale) * 100vmin);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  filter: var(--lift);
+  /*
+   * --mx / --my are percentages of the sticker's own box, so the pull is the
+   * same fraction of the artwork whatever size it is drawn at.
+   */
+  transform: translate(-50%, -50%) translate(var(--mx, 0), var(--my, 0))
+    perspective(500px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg))
+    rotate(var(--turn, 0deg));
+  transform-style: preserve-3d;
+  /* Eases back to rest on the way out; killed while a tilt is being driven. */
+  transition:
+    transform 500ms ease,
+    filter 160ms ease;
+}
+
+.sticker.is-tilting {
+  transition: filter 160ms ease;
+}
+
+.sticker.is-held {
+  --lift: drop-shadow(0 4px 2px rgba(27, 28, 31, 0.2))
+    drop-shadow(0 20px 26px rgba(27, 28, 31, 0.26));
+
+  cursor: grabbing;
+}
+
+.sticker__art,
+.sticker__holo,
+.sticker__glare {
+  position: absolute;
+  inset: 0;
+}
+
+.sticker__art {
+  background-image: var(--art);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/*
+ * The rainbow, cut twice over: once to the sticker's silhouette and once to the
+ * light band, which is the `mode="luminance"` mask in the original — a CSS mask
+ * reads alpha rather than luminance, so the band carries its brightness as
+ * alpha and lands in the same place.
+ */
+.sticker__holo {
+  -webkit-mask-image: var(--art),
+    linear-gradient(
+      var(--sweep),
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.8) 38%,
+      rgba(255, 255, 255, 0.18) 50%,
+      rgba(255, 255, 255, 0.7) 62%,
+      rgba(255, 255, 255, 0) 100%
+    );
+  -webkit-mask-size: contain, 200% 200%;
+  -webkit-mask-position: center, var(--gx, 50%) var(--gy, 50%);
+  -webkit-mask-repeat: no-repeat, no-repeat;
+  -webkit-mask-composite: source-in;
+  mask-image: var(--art),
+    linear-gradient(
+      var(--sweep),
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.8) 38%,
+      rgba(255, 255, 255, 0.18) 50%,
+      rgba(255, 255, 255, 0.7) 62%,
+      rgba(255, 255, 255, 0) 100%
+    );
+  mask-size: contain, 200% 200%;
+  mask-position: center, var(--gx, 50%) var(--gy, 50%);
+  mask-repeat: no-repeat, no-repeat;
+  mask-composite: intersect;
+  background-image: linear-gradient(
+    var(--sweep),
+    #ff3b30,
+    #ff9500,
+    #ffcc00,
+    #4cd964,
+    #34aadc,
+    #5856d6,
+    #ff3b30
+  );
+  background-size: 200% 200%;
+  background-position: var(--gx, 50%) var(--gy, 50%);
+  /*
+   * Blur runs before masking in the CSS rendering model, so this softens the
+   * boundaries between the rainbow's stops without touching the silhouette the
+   * mask cuts — the edge stays as crisp as the artwork.
+   */
+  filter: blur(calc(7px * var(--sticker-scale, 1)));
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+/* The plain sheen the reference lays over everything, at its weaker stops. */
+.sticker__glare {
+  mask-image: var(--art);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: var(--art);
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  background-image: linear-gradient(
+    var(--sweep),
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.3) 38%,
+    rgba(255, 255, 255, 0.07) 50%,
+    rgba(255, 255, 255, 0.2) 62%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 200%;
+  background-position: var(--gx, 50%) var(--gy, 50%);
+  filter: blur(calc(5px * var(--sticker-scale, 1)));
+  pointer-events: none;
 }
 
 .custom-cursor {
@@ -91,6 +373,9 @@ body {
   pointer-events: none;
   user-select: none;
   image-rendering: pixelated;
+  /* drop-shadow, not box-shadow: the PNG is a 29x48 arrow on a transparent
+     field, and box-shadow would outline that rectangle instead of the arrow. */
+  filter: drop-shadow(1px 2px 2px rgba(27, 28, 31, 0.38));
   will-change: transform;
 }
 
@@ -132,6 +417,17 @@ body {
   transform: scale(0.94);
 }
 
+/* Bottom-right. Same inset off both edges that .action-bar keeps off its own. */
+/*
+ * The tray: arrows either side of one square window. The window is a single
+ * canvas holding the whole ring, so there is no rail, no sliding track and no
+ * per-slot cell any more — the turntable in components/Inventory does that
+ * work in 3D, and the stations that are not at the front simply fall outside
+ * this frame.
+ *
+ * Square on purpose: .inventory__ground and .inventory__frame clip with an
+ * objectBoundingBox path, which skews its corners on anything oblong.
+ */
 .inventory {
   --cell: var(--ui);
   --gap: calc(var(--ui) * 0.06);
@@ -139,14 +435,12 @@ body {
   --aside: 0.6;
   --aside-fade: 0.32;
 
-  position: absolute;
-  left: 50%;
-  bottom: calc(var(--ui) * 0.167);
+  position: relative;
   z-index: 6;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  transform: translateX(-50%);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -285,15 +579,7 @@ body {
 }
 
 .inventory__mark-body path {
-  fill: #9a9ca1;
-}
-
-.inventory__mark-inner path {
-  fill: none;
-  stroke: #377cf6;
-  stroke-width: 22;
-  opacity: 0.3;
-  filter: blur(4px);
+  fill: #d5d7db;
 }
 
 .inventory__slot {
@@ -309,16 +595,20 @@ body {
   position: absolute;
   inset: 0;
   clip-path: url(#inventory-squircle);
-  opacity: 0.7;
+  background: linear-gradient(to bottom, var(--ground-top), var(--ground-bottom));
   pointer-events: none;
   user-select: none;
 }
 
 .inventory__ground-art {
+  --tile: calc(var(--cell) * 0.095);
+
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  opacity: 0.7;
+  background-image: var(--pattern);
+  background-repeat: repeat;
+  background-size: var(--tile) var(--tile);
   transform: rotate(30deg) scale(2);
 }
 
@@ -328,21 +618,13 @@ body {
   width: 100%;
   height: 100%;
   fill: none;
-  stroke: #ffffff;
+  stroke: #b4b5b8;
   stroke-width: 8;
   clip-path: url(#inventory-squircle);
   vector-effect: non-scaling-stroke;
   transition:
     fill 140ms ease,
     stroke 140ms ease;
-}
-
-.inventory__inner {
-  fill: none;
-  stroke: #377cf6;
-  stroke-width: 24;
-  opacity: 0.14;
-  filter: blur(5px);
 }
 
 .inventory__item {
@@ -353,8 +635,44 @@ body {
   clip-path: url(#inventory-squircle);
 }
 
-.inventory__canvas {
+/*
+ * The float the 3D slots used to run per frame — bob, sway and tilt — reduced
+ * to what a flat image can carry: a rise and a small roll. The thumbnails are
+ * baked with their shadow in them, so the whole stamp moves together, which is
+ * why the amplitude stays small.
+ */
+@keyframes inventory-float {
+  from {
+    transform: translateY(-2.4%) rotate(-1.1deg);
+  }
+  to {
+    transform: translateY(2.4%) rotate(1.1deg);
+  }
+}
+
+.inventory__art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   pointer-events: none;
+  user-select: none;
+  animation: inventory-float 2.2s ease-in-out infinite alternate;
+}
+
+/* Offsets, so the row does not breathe in lockstep. */
+.inventory__cell:nth-child(2) .inventory__art {
+  animation-delay: -0.7s;
+}
+
+.inventory__cell:nth-child(3) .inventory__art {
+  animation-delay: -1.4s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inventory__art {
+    animation: none;
+  }
 }
 
 .deck {
@@ -464,9 +782,7 @@ body {
   .split__stage {
     grid-column: 1;
     grid-row: 1;
-    margin: calc(var(--gutter) * -1);
-    margin-bottom: 0;
-    border-radius: 0;
+    margin: 0;
   }
 
   .deck {

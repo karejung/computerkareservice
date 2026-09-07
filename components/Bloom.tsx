@@ -29,7 +29,14 @@ export function Bloom({ enabled, strength, radius, threshold }: BloomProps) {
     });
 
     const composer = new EffectComposer(gl, target);
-    const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), strength, radius, threshold);
+    // Built at the canvas's current size rather than 1x1: the constructor
+    // allocates the mip chain from this, and setSize only resizes what exists.
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(Math.max(1, gl.domElement.width), Math.max(1, gl.domElement.height)),
+      strength,
+      radius,
+      threshold,
+    );
 
     composer.addPass(new RenderPass(scene, camera));
     composer.addPass(bloom);
@@ -49,6 +56,15 @@ export function Bloom({ enabled, strength, radius, threshold }: BloomProps) {
   }, [rig]);
 
   useLayoutEffect(() => {
+    /*
+     * Bail on a zero measurement instead of passing it on. UnrealBloomPass
+     * halves what it is given for its mip chain, so setSize(0, 0) leaves it
+     * holding zero-sized render targets — incomplete framebuffers, which take
+     * the whole composer down with them and leave the canvas blank. The layout
+     * settles a frame later and this runs again with real numbers, but only if
+     * it has not already poisoned the passes.
+     */
+    if (!size.width || !size.height) return;
     rig.composer.setPixelRatio(dpr);
     rig.composer.setSize(size.width, size.height);
   }, [rig, dpr, size]);

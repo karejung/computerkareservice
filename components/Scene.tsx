@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -9,6 +10,7 @@ import * as THREE from 'three';
 import { asset } from '@/lib/asset';
 import { Kare, type KareHandle, type KareMode } from './Kare';
 import { Inventory, type InventoryHandle } from './Inventory';
+import { SquircleCard } from './SquircleCard';
 import { Bloom } from './Bloom';
 import { PuffBurst, type PuffBurstHandle } from './PuffBurst';
 import { StarSpiral, type StarSpiralHandle } from './StarSpiral';
@@ -16,13 +18,25 @@ import { StarSpiral, type StarSpiralHandle } from './StarSpiral';
 const CURSOR_DEFAULT = { src: asset('/cursors/cursor.png'), x: 3, y: 1 };
 const CURSOR_POINTER = { src: asset('/cursors/pointer.png'), x: 8, y: 0 };
 const POINTER_TARGET =
-  'a, button, [role="button"], input, select, textarea, label, summary, .action-btn';
+  'a, button, [role="button"], input, select, textarea, label, summary, .action-btn, .sticker';
 
+/*
+ * Portalled to <body> rather than left in .scene-root, because .split__stage
+ * carries `container-type: size` — which implies `contain: layout`, and that
+ * makes the stage the containing block for `position: fixed` descendants. In
+ * there the cursor was measured from the stage's corner instead of the
+ * viewport's, so it sat a gutter off from the real pointer, and the stage's
+ * `overflow: hidden` and clip-path cut it off the moment it left the canvas.
+ */
 function CustomCursor() {
   const img = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
+      // Touch and pen drags raise pointermove too. This is a stand-in for a
+      // mouse pointer, so without a real one it is just a sticker left behind
+      // wherever the last tap landed.
+      if (e.pointerType !== 'mouse') return;
       const under = document.elementFromPoint(e.clientX, e.clientY);
       const next =
         under && under.closest(POINTER_TARGET) ? CURSOR_POINTER : CURSOR_DEFAULT;
@@ -50,7 +64,8 @@ function CustomCursor() {
     };
   }, []);
 
-  return (
+  // Scene is imported with `ssr: false`, so document is always there by now.
+  return createPortal(
     <img
       ref={img}
       className="custom-cursor"
@@ -59,7 +74,8 @@ function CustomCursor() {
       draggable={false}
       aria-hidden
       style={{ opacity: 0 }}
-    />
+    />,
+    document.body,
   );
 }
 
@@ -96,6 +112,13 @@ const FACE_DROP = 0.3;
 
 const MIN_POLAR = 0.2;
 const MAX_POLAR = Math.PI / 2 - 0.02;
+
+/*
+ * The character tier is one flat colour now, not a ramp — this and the CSS
+ * background on .scene-root__view are the same value, so the hand-off at first
+ * frame is invisible.
+ */
+const CANVAS_BG = 0xd5d7db;
 
 const GREY = '#e0e0e0';
 const WHITE = '#ffffff';
@@ -163,19 +186,41 @@ function GroundAndFit({
 }) {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
+  const size = useThree((s) => s.size);
   const frame = useRef(0);
   const done = useRef(false);
   const tallest = useRef(0);
   const settled = useRef(0);
+  const orbited = useRef(false);
+  const facing = useRef(BODY_DIR.clone());
 
   useEffect(() => {
     if (!controls) return;
     const yield_ = () => {
       done.current = true;
+      orbited.current = true;
     };
     controls.addEventListener('start', yield_);
     return () => controls.removeEventListener('start', yield_);
   }, [controls]);
+
+  /*
+   * The fit is distance-from-aspect, so it goes stale the moment the viewport
+   * changes shape — which is why resizing the window used to crop the model and
+   * never recover: the fit ran once and set `done`.
+   *
+   * Re-running it keeps the framing, but it must not also undo an orbit. Once
+   * the user has dragged, the direction they left the camera on is remembered
+   * and the refit re-uses it; only the distance is recomputed.
+   */
+  useEffect(() => {
+    if (controls && orbited.current) {
+      facing.current.copy(camera.position).sub(controls.target).normalize();
+    }
+    done.current = false;
+    frame.current = 3;
+    settled.current = 21;
+  }, [size.width, size.height, camera, controls]);
 
   useFrame(() => {
     if (done.current || !group.current || !controls) return;
@@ -215,7 +260,7 @@ function GroundAndFit({
     const fitWidth = extent.x / 2 / Math.tan(halfFov) / camera.aspect;
     const distance = Math.max(fitHeight, fitWidth) * 1.35;
 
-    const dir = BODY_DIR;
+    const dir = orbited.current ? facing.current : BODY_DIR;
     camera.position.copy(center).addScaledVector(dir, distance);
     camera.near = distance / 200;
     camera.far = distance * 200;
@@ -234,6 +279,47 @@ function GroundAndFit({
       maxDistance: controls.maxDistance,
     };
   });
+
+  return null;
+}
+
+/*
+ * three compiles a program the first time a mesh is actually drawn, and the
+ * props sit at `visible = false` until they are picked — so the compile lands
+ * on the frame the prop appears, which is exactly the frame that could least
+ * afford it. Each prop's screen is its own raw ShaderMaterial with the star
+ * field inlined, so there is real work to do there.
+ *
+ * Everything hidden is shown for the length of one traversal and put straight
+ * back. `compileAsync` gathers its materials synchronously before it returns
+ * the promise, so the restore does not have to wait for the compile to finish
+ * — which matters, because waiting would leave all three props on screen at
+ * once for however long the driver took.
+ */
+function Precompile() {
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
+  const done = useRef(false);
+
+  useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+
+    const hidden: THREE.Object3D[] = [];
+    scene.traverse((object) => {
+      if (!object.visible) {
+        hidden.push(object);
+        object.visible = true;
+      }
+    });
+
+    try {
+      gl.compileAsync(scene, camera);
+    } finally {
+      for (const object of hidden) object.visible = false;
+    }
+  }, [gl, scene, camera]);
 
   return null;
 }
@@ -465,98 +551,96 @@ export default function Scene() {
 
   return (
     <div className="scene-root">
-      <Canvas
+      <SquircleCard id="view-squircle" className="scene-root__view">
+        <Canvas
 
-        flat
-        dpr={[1, 2]}
-        gl={{ antialias: true, alpha: false }}
-        camera={{ position: [-2, 1.4, 3], fov: 35, near: 0.01, far: 500 }}
-        onCreated={({ gl }) => gl.setClearColor(0xcccccc, 1)}
-      >
-        <Suspense fallback={null}>
-          <ambientLight intensity={1} />
-          <group ref={model}>
-            <Kare
-              ref={kare}
-              emissive={LOOK.emissive}
-              shadeColor={LOOK.shadeColor}
-              shadeSplit={LOOK.shadeSplit}
-              shadeAngle={LOOK.shadeAngle}
-              shadeHeight={LOOK.shadeHeight}
-              headYaw={LOOK.headYaw}
-              headPitch={LOOK.headPitch}
-              onModeChange={setMode}
-              onSpin={(seconds) => stars.current?.burst(seconds)}
-              onPuff={(at, radius, stars) => puff.current?.burst(at, radius, stars)}
-              onSparkle={(at) => puff.current?.sparkle(at)}
-            />
-            <StarSpiral ref={stars} />
-          </group>
-        </Suspense>
-
-        <PuffBurst ref={puff} />
-
-        <Floor
-          a={LOOK.background}
-          b={LOOK.background2}
-          cell={LOOK.checkerSize}
-          meshRef={floor}
-        />
-
-        <OrbitControls
-          makeDefault
-          enableDamping
-          dampingFactor={0.06}
-          enablePan={false}
-          minPolarAngle={MIN_POLAR}
-          maxPolarAngle={MAX_POLAR}
-        />
-        <GroundAndFit group={model} floor={floor} home={home} />
-        <CameraFocus group={model} home={home} face={faceZoom} />
-
-        <Bloom
-          enabled={LOOK.bloom}
-          strength={LOOK.bloomStrength}
-          radius={LOOK.bloomRadius}
-          threshold={LOOK.bloomThreshold}
-        />
-      </Canvas>
-
-      <CustomCursor />
-
-      <div className="action-bar">
-        <button
-          type="button"
-          className="action-btn"
-          aria-label="V sign"
-          onClick={() => goEmpty(() => kare.current?.playVsign())}
+          flat
+          dpr={[1, 2]}
+          gl={{ antialias: true, alpha: false }}
+          camera={{ position: [-2, 1.4, 3], fov: 35, near: 0.01, far: 500 }}
+          onCreated={({ gl }) => gl.setClearColor(CANVAS_BG, 1)}
         >
-          <img src={asset('/image/vbutton.png')} alt="" draggable={false} />
-        </button>
-        <button
-          type="button"
-          className="action-btn"
-          aria-label={faceZoom ? 'Full body' : 'Face zoom'}
-          aria-pressed={faceZoom}
-          onClick={() => goEmpty(() => setFaceZoom((v) => !v))}
-        >
-          <img src={asset('/image/cambutton.png')} alt="" draggable={false} />
-        </button>
-      </div>
+            <Suspense fallback={null}>
+            <ambientLight intensity={1} />
+            <group ref={model}>
+              <Kare
+                ref={kare}
+                emissive={LOOK.emissive}
+                shadeColor={LOOK.shadeColor}
+                shadeSplit={LOOK.shadeSplit}
+                shadeAngle={LOOK.shadeAngle}
+                shadeHeight={LOOK.shadeHeight}
+                headYaw={LOOK.headYaw}
+                headPitch={LOOK.headPitch}
+                onModeChange={setMode}
+                onSpin={(seconds) => stars.current?.burst(seconds)}
+                onPuff={(at, radius, stars) => puff.current?.burst(at, radius, stars)}
+                onSparkle={(at) => puff.current?.sparkle(at)}
+              />
+              <StarSpiral ref={stars} />
+            </group>
+            <Precompile />
+          </Suspense>
+
+          <PuffBurst ref={puff} />
+
+          <Floor
+            a={LOOK.background}
+            b={LOOK.background2}
+            cell={LOOK.checkerSize}
+            meshRef={floor}
+          />
+
+          <OrbitControls
+            makeDefault
+            enableDamping
+            dampingFactor={0.06}
+            enablePan={false}
+            minPolarAngle={MIN_POLAR}
+            maxPolarAngle={MAX_POLAR}
+          />
+          <GroundAndFit group={model} floor={floor} home={home} />
+          <CameraFocus group={model} home={home} face={faceZoom} />
+
+          <Bloom
+            enabled={LOOK.bloom}
+            strength={LOOK.bloomStrength}
+            radius={LOOK.bloomRadius}
+            threshold={LOOK.bloomThreshold}
+          />
+        </Canvas>
+
+        <CustomCursor />
+
+        <div className="action-bar">
+          <button
+            type="button"
+            className="action-btn"
+            aria-label="V sign"
+            onClick={() => goEmpty(() => kare.current?.playVsign())}
+          >
+            <img src={asset('/image/vbutton.png')} alt="" draggable={false} />
+          </button>
+          <button
+            type="button"
+            className="action-btn"
+            aria-label={faceZoom ? 'Full body' : 'Face zoom'}
+            aria-pressed={faceZoom}
+            onClick={() => goEmpty(() => setFaceZoom((v) => !v))}
+          >
+            <img src={asset('/image/cambutton.png')} alt="" draggable={false} />
+          </button>
+        </div>
+      </SquircleCard>
 
       <Inventory
         ref={inventory}
-        held={mode !== 'idle'}
         busy={busy}
         onArrow={onArrow}
         onSettled={() => {
           if (mode === wanted) setBusy(false);
         }}
         onSelect={(kind) => setWanted(kind === 'unknown' ? 'idle' : kind)}
-        shadeColor={LOOK.shadeColor}
-        shadeSplit={LOOK.shadeSplit}
-        shadeAngle={LOOK.shadeAngle}
-        shadeHeight={LOOK.shadeHeight}
       />
 
     </div>

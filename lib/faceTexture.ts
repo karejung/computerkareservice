@@ -1,6 +1,27 @@
 import * as THREE from 'three';
 
-const SIZE = 2048;
+/*
+ * ART is the space every path, eye centre and socket below is authored in —
+ * it is fixed, and nothing here is in pixels. SIZE is what the canvas actually
+ * costs, and the two are only incidentally related.
+ *
+ * That distinction is the whole point: `update()` ends in
+ * `texture.needsUpdate = true`, which re-uploads the entire canvas and
+ * regenerates its mip chain. At the old SIZE of 2048 that was 16.8 MB a pop,
+ * and the dirty test below clears on roughly 35 consecutive frames per glance
+ * (LOOK_SMOOTHING against a 0.05 threshold), so a single eye movement pushed
+ * something like 590 MB across the bus. On a phone that is the frame budget,
+ * gone. At 512 the same glance costs about 37 MB.
+ *
+ * 512 rather than 256 because of the eyebrows: they are the thinnest stroke on
+ * the face, ~40 units of ART, so 256 renders them 5 texels wide and they go
+ * mushy once the face-zoom camera fills the screen with the head. 10 texels
+ * holds. The pupils survive either way, and the difference costs 0.8 MB an
+ * upload against the 16 MB already saved.
+ */
+const ART = 2048;
+const SIZE = 512;
+const SCALE = SIZE / ART;
 
 const PATH_D = {
   face: 'M1444.47 1818.51L1031.96 1925.74L613.5 1816.94C609.3 1815.85 605.75 1811.57 603.18 1808.91L581.04 1785.95L559.92 1764.07L529.84 1733.13L503.64 1706.35L481.05 1682.95L459.92 1661.07L429.84 1630.13L402.68 1602.35L383.06 1581.83C380.89 1579.56 376.73 1576.19 375.86 1573.07L362 1522.91C360.8 1518.59 359 1515.01 355.84 1511.06L298.14 1565.4C291.1 1567.51 283.45 1567 276.03 1567.47L261.02 1568.42C256.29 1568.72 251.84 1568.08 248.38 1564.41L181.12 1492.99C176.06 1487.62 170.96 1482.88 167.39 1476.37L126.52 1297.03L109.94 1138.08C109.46 1133.45 109.2 1129.86 112.58 1126.54L139.89 1099.76L200.55 1039.66C216.33 1024.03 217.12 1027.71 233.95 1026.43C241.16 1025.88 248.77 1024.38 256.06 1026.16C262.73 1027.78 267.87 1034.48 274.02 1038C278.65 1035.42 278.74 1029.95 278.46 1024.93L277.21 1001.99L276.26 981.92L275.22 959.99L274.27 939.92L273.23 917.99L272.27 897.92L271.22 875.99L270.26 855.93L269.38 833.9C269.12 827.34 266.92 819.88 269.06 812.91L414.73 338.04C417.09 333.8 420.31 332.16 424.79 330.47L1031.95 101.53L1638.45 330.21C1642.98 331.92 1646.25 333.28 1649 337.43L1794.91 812.92C1796.96 819.61 1794.88 826.61 1794.62 832.91L1793.73 854.93L1792.77 874.99L1791.72 896.92L1790.76 916.99L1789.72 938.92L1788.76 958.99L1787.75 979.99L1786.74 1000.95L1786.04 1016.07L1785.31 1029.88C1785.23 1031.45 1786.9 1035.01 1787.57 1036.46C1789.89 1041.49 1798.78 1028.97 1807.21 1026.38C1814.47 1024.14 1822.5 1025.84 1830.05 1026.49C1836.19 1027.02 1844.81 1025.32 1850.19 1028.83C1856.9 1033.2 1862.57 1038.98 1868.36 1044.71L1928.55 1104.28L1951.87 1127.1C1954.96 1130.13 1954.41 1133.71 1953.97 1137.93L1937.38 1296.98L1896.36 1477.09L1876.05 1500.12L1816.06 1563.88C1812.38 1567.79 1808.15 1568.77 1802.91 1568.42L1787.93 1567.41C1780.91 1566.94 1773.18 1568.03 1766.72 1565.27C1762.78 1563.58 1759.7 1559.25 1756.35 1556.59L1710.13 1512.9C1709.68 1512.51 1707.82 1511.16 1707.49 1511.65L1705.86 1514.01C1703.93 1516.8 1702.73 1520.18 1701.78 1523.6L1688.11 1573.04C1687.18 1576.39 1682.77 1579.87 1680.43 1582.31L1658.83 1604.83L1632.15 1632.11L1602.07 1663.05L1580.95 1684.93L1558.84 1707.82L1533.15 1734.11L1502.08 1766.04L1480.96 1787.93L1458.97 1810.85C1454.94 1815.05 1450.98 1816.79 1444.47 1818.48V1818.51Z',
@@ -38,8 +59,6 @@ const WINK_W = 184;
 const WINK_H = 157;
 const WINK_SPREAD = 32;
 const WINK_SCALE = 1.859;
-const WINK_IN = 0.45;
-const WINK_OUT = 0.14;
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
 const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
@@ -73,8 +92,10 @@ export function createFaceRig(): FaceRig {
   const look = { x: 0, y: 0, tx: 0, ty: 0 };
   let blinkT0 = -1;
   let nextBlink = performance.now() + 1500;
-  let wink = 0;
-  let winkTarget = 0;
+  // A boolean, not a ramp. The wink used to cross-fade the eyelid out and the
+  // >< mark in through globalAlpha, which on a face drawn in flat ink read as
+  // a smear rather than a change of expression.
+  let wink = false;
   let ink = INK;
   let dirty = true;
 
@@ -91,8 +112,12 @@ export function createFaceRig(): FaceRig {
     return t < 0.4 ? 1 - smooth(t / 0.4) : smooth((t - 0.4) / 0.6);
   }
 
-  function drawFace(lookX: number, lookY: number, blink: number, winkAmt: number) {
-    ctx.clearRect(0, 0, SIZE, SIZE);
+  function drawFace(lookX: number, lookY: number, blink: number, winking: boolean) {
+    // Everything below is in ART units, so the canvas is scaled once here
+    // rather than each path being rewritten. Set before any save(), so the
+    // restore() calls inside land back on it rather than on the identity.
+    ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+    ctx.clearRect(0, 0, ART, ART);
 
     ctx.fillStyle = FACE_FILL;
     ctx.fill(parts.face);
@@ -103,7 +128,7 @@ export function createFaceRig(): FaceRig {
     ] as const) {
       const { cx, cy } = eye.c;
 
-      const open = blink * (1 - winkAmt);
+      const open = winking ? 0 : blink;
       const b = Math.max(open, 0.02);
 
       if (open > 0.12) {
@@ -127,9 +152,8 @@ export function createFaceRig(): FaceRig {
 
       const flip = -0.85 + 1.85 * open;
       const lidS = Math.abs(flip) < 0.04 ? (flip < 0 ? -0.04 : 0.04) : flip;
-      if (winkAmt < 0.999) {
+      if (!winking) {
         ctx.save();
-        ctx.globalAlpha = 1 - winkAmt;
         ctx.translate(0, (1 - open) * LID_DROP);
         ctx.translate(0, LID_PIVOT_Y);
         ctx.scale(1, lidS);
@@ -139,9 +163,8 @@ export function createFaceRig(): FaceRig {
         ctx.restore();
       }
 
-      if (winkAmt > 0.001) {
+      if (winking) {
         ctx.save();
-        ctx.globalAlpha = winkAmt;
         ctx.translate(cx + WINK_SPREAD * (eye.mirror ? -1 : 1), cy);
         ctx.scale(WINK_SCALE * (eye.mirror ? -1 : 1), WINK_SCALE);
         ctx.translate(-WINK_W / 2, -WINK_H / 2);
@@ -158,7 +181,7 @@ export function createFaceRig(): FaceRig {
     }
   }
 
-  const last = { x: NaN, y: NaN, blink: NaN, wink: NaN };
+  const last = { x: NaN, y: NaN, blink: NaN, wink: null as boolean | null };
 
   return {
     texture,
@@ -184,15 +207,19 @@ export function createFaceRig(): FaceRig {
     },
 
     setWink(on: boolean) {
-      winkTarget = on ? 1 : 0;
+      if (on === wink) return;
+      wink = on;
+      dirty = true;
     },
 
     update() {
       look.x += (look.tx - look.x) * LOOK_SMOOTHING;
       look.y += (look.ty - look.y) * LOOK_SMOOTHING;
-      const blink = blinkValue(performance.now());
-      wink += (winkTarget - wink) * (winkTarget > wink ? WINK_IN : WINK_OUT);
-      if (Math.abs(winkTarget - wink) < 0.002) wink = winkTarget;
+      // Keep the blink schedule ticking, but hold the value steady while the
+      // wink is up: drawFace ignores blink entirely when winking, so letting it
+      // vary only fails the dirty test below and repaints an identical face.
+      const blinking = blinkValue(performance.now());
+      const blink = wink ? 1 : blinking;
 
       if (
         !dirty &&

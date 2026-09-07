@@ -131,6 +131,7 @@ export type StarSpiralHandle = {
 };
 
 export const StarSpiral = forwardRef<StarSpiralHandle>(function StarSpiral(_props, ref) {
+  const points = useRef<THREE.Points>(null);
   const clock = useRef({ time: 0, life: 0 });
 
   const particles = useMemo<Particle[]>(() => {
@@ -226,6 +227,11 @@ export const StarSpiral = forwardRef<StarSpiralHandle>(function StarSpiral(_prop
     material.uniforms.uPixelRatio.value = state.gl.getPixelRatio();
 
     const c = clock.current;
+    // Idle, these 60 sprites still rasterise at their full authored size every
+    // frame and discard on alpha — `aSize` is filled from the particles at
+    // build time, so unlike the puffs they are never zero. Take them out of
+    // the scene instead.
+    if (points.current) points.current.visible = c.life > 0;
     if (c.life <= 0) return;
 
     c.time += dt;
@@ -274,5 +280,13 @@ export const StarSpiral = forwardRef<StarSpiralHandle>(function StarSpiral(_prop
     }
   });
 
-  return <points geometry={geometry} material={material} frustumCulled={false} />;
+  return (
+    <points
+      ref={points}
+      geometry={geometry}
+      material={material}
+      frustumCulled={false}
+      visible={false}
+    />
+  );
 });
