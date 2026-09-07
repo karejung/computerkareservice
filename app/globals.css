@@ -1,24 +1,27 @@
 :root {
-  /* The 3D canvas. Must match CANVAS_BG in components/Scene.tsx, which is
-     what the renderer actually clears to. */
   --page: #e7e7e7;
   --fg: #1b1c1f;
   --fg-dim: #6d7076;
   --accent: #2b6ef5;
   --line: rgba(27, 28, 31, 0.16);
+  /* The inventory tile's outline, and the label's outline and text with it. */
+  --outline: #b4b5b8;
 
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    monospace;
   --font-ui: ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
 
   --round: 50px;
   --gutter: 20px;
 
-  /* Two ramps, not one. The page and the 3D canvas share --sky-*, read off
-     :root by components/Scene.tsx as well as by the rules below; the inventory
-     slot keeps its own lighter --ground-* so it still reads as a lit tile
-     against them. --pattern is that slot's checkers; nothing else uses it. */
+  /* The page and the 3D canvas share this ramp; components/Scene.tsx reads it
+     off :root. The inventory slot that used to have its own lighter --ground-*
+     and a --pattern of checkers is gone, and so are they. */
   --sky-pale: #d5d7db;
   --sky-deep: #b4b5b8;
+
+  /* The inventory tile: a lighter ramp than the sky, so it reads as lit
+     against it, and the checkers that texture it. */
   --ground-top: #d5d7db;
   --ground-bottom: #ffffff;
   --pattern: url("data:image/svg+xml,%3Csvg width='54' height='54' viewBox='0 0 54 54' fill='none' xmlns='http://www.w3.org/2000/svg'%3E %3Crect width='27' height='27' fill='%23D5D7DB'/%3E %3Crect x='27' y='27' width='27' height='27' fill='%23D5D7DB'/%3E %3Crect x='27' width='27' height='27' fill='%23ECEEF1'/%3E %3Crect y='27' width='27' height='27' fill='%23ECEEF1'/%3E %3C/svg%3E");
@@ -93,7 +96,11 @@ html {
   margin: 0;
   min-width: 0;
   position: relative;
-  overflow: hidden;
+  /*
+   * No overflow clip. The canvas is cut to shape by SquircleCard's own
+   * clip-path, so the only thing this was still trimming was the sticker layer
+   * — which is meant to spill past the frame and into the gutter.
+   */
   /* No background and no rounding of its own: the two tiers inside are the
      cards now, and this is only what sizes them and anchors --ui's container
      query. */
@@ -120,57 +127,42 @@ html {
 }
 
 
-/*
- * Two tiers: the avatar takes the upper row and the tray gets a row of its own
- * underneath, so the canvas stops where the inventory starts instead of running
- * behind it.
- */
 .scene-root {
   position: absolute;
   inset: 0;
   z-index: 2;
   --ui: clamp(40px, min(calc(34cqw - 24px), calc(36cqh - 50px)), 168px);
-  display: grid;
-  /*
-   * minmax(0, ...) on both axes, not 1fr/auto. Without an explicit column the
-   * implicit one is `auto`, which sizes to max-content — and the canvas carries
-   * an intrinsic width from its drawing buffer, so the track grew past the card
-   * and `overflow: hidden` sheared the right-hand side off. A plain `1fr` has
-   * the same floor of min-content and fails the same way.
-   */
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: var(--gutter);
   user-select: none;
   -webkit-user-select: none;
 }
 
 /*
- * min-height: 0, or the canvas's intrinsic height wins the `1fr` argument and
- * pushes the tray off the bottom. The action bar is absolute against this
- * rather than .scene-root, so it centres on the avatar and ignores the tray.
+ * The card: the canvas fills it and the action bar and tray ride on top. It is
+ * what carries the squircle, so the corners belong to the picture rather than
+ * to the cell around it.
+ *
+ * min-width/min-height: 0 because the canvas reports an intrinsic size from its
+ * drawing buffer, and anything that lets that size win — a grid track, a flex
+ * basis — grows the box past its parent and the overflow gets sheared off.
  */
-.scene-root__view {
-  position: relative;
-  /* Belt and braces with the minmax above: a grid item's automatic minimum is
-     its min-content size unless it is told otherwise. */
-  min-width: 0;
-  min-height: 0;
-  /* Matches CANVAS_BG in components/Scene.tsx — what the canvas clears to. */
-  background: #d5d7db;
-}
-
-
-.scene-root canvas {
-  display: block;
-  touch-action: none;
-  background: transparent;
-}
-
+/*
+ * The clipPath carrier. It holds no drawing, but an <svg> is an inline
+ * replaced element with a default 300x150 box — left in flow it pushes the
+ * canvas down by exactly that much.
+ */
 .squircle-defs {
   position: absolute;
   width: 0;
   height: 0;
+}
+
+.scene-root__view {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  min-width: 0;
+  min-height: 0;
+  background: #d5d7db;
 }
 
 /*
@@ -207,9 +199,15 @@ html {
    */
   --sticker-scale: 1;
 
-  position: fixed;
+  /*
+   * canvas < stickers < controls, ordered inside .scene-root. All three are
+   * positioned children of it, so these z-indexes are comparable — which they
+   * were not while this layer lived up at page level, outside the stacking
+   * context .split__stage establishes with its container-type.
+   */
+  position: absolute;
   inset: 0;
-  z-index: 20;
+  z-index: 4;
   pointer-events: none;
 }
 
@@ -221,22 +219,25 @@ html {
 
 /*
  * The hologram is a port of DongGukMon/TiltHologramCard, which draws it in
- * Skia. Every piece it uses has a CSS counterpart, so the layer stack, the
- * colours and the stop positions below are that component's, not an
- * approximation of it:
+ * Skia: perspective(500px) with rotateX/rotateY clamped to 15°, a rainbow ramp
+ * masked by a moving light and composited in `overlay`, then a plain sheen over
+ * the top.
  *
- *   perspective(500px) + rotateX/rotateY, clamped to 15°
- *   a rainbow ramp, masked by a moving light band, composited in `overlay`
- *   a second, weaker light band straight over the top
- *
- * The one liberty is the pattern: the reference masks with a holo_background
- * PNG, and this uses a fine repeating stripe instead, blended into the rainbow.
+ * Two departures. The reference masks with a holo_background PNG, which is left
+ * out. And its light is a diagonal band — replaced here with a soft disc that
+ * sits under the pointer, because a straight edge sweeping a die-cut shape
+ * reads as a stripe laid over it rather than as light on it.
  */
 .sticker {
-  --lift: drop-shadow(0 2px 1px rgba(27, 28, 31, 0.18))
-    drop-shadow(0 10px 14px rgba(27, 28, 31, 0.2));
-  /* Both bands run the same way; only their origin moves. */
-  --sweep: 135deg;
+  --lift: drop-shadow(0 1px 1px rgba(27, 28, 31, 0.1))
+    drop-shadow(0 5px 8px rgba(27, 28, 31, 0.12));
+  /*
+   * Where the highlight rests: the top-right corner, matching the direction the
+   * 3D scene is lit from. Only the first paint uses these — components/Stickers
+   * owns the numbers (LIGHT_REST) and writes them from then on.
+   */
+  --gx: 78%;
+  --gy: 16%;
 
   position: absolute;
   width: calc(var(--span) * var(--sticker-scale) * 100vmin);
@@ -248,9 +249,9 @@ html {
    * --mx / --my are percentages of the sticker's own box, so the pull is the
    * same fraction of the artwork whatever size it is drawn at.
    */
-  transform: translate(-50%, -50%) translate(var(--mx, 0), var(--my, 0))
-    perspective(500px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg))
-    rotate(var(--turn, 0deg));
+  transform: translate(-50%, -50%) translate(var(--sx, 0), var(--sy, 0))
+    translate(var(--mx, 0), var(--my, 0)) perspective(500px)
+    rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) rotate(var(--turn, 0deg));
   transform-style: preserve-3d;
   /* Eases back to rest on the way out; killed while a tilt is being driven. */
   transition:
@@ -258,66 +259,110 @@ html {
     filter 160ms ease;
 }
 
+/*
+ * On its way to the edge: slow, and with the overshoot of a spring rather than
+ * a plain ease — the curve's control point sits above 1, so it carries past the
+ * mark and settles back. Staggered, and nothing catches the pointer once it is
+ * going. Set per sticker, because a held tool sweeps its neighbours and stays.
+ */
+.sticker.is-away {
+  pointer-events: none;
+  transition: transform 900ms cubic-bezier(0.22, 1.32, 0.36, 1) var(--sweep-delay, 0ms);
+}
+
 .sticker.is-tilting {
   transition: filter 160ms ease;
 }
 
 .sticker.is-held {
-  --lift: drop-shadow(0 4px 2px rgba(27, 28, 31, 0.2))
-    drop-shadow(0 20px 26px rgba(27, 28, 31, 0.26));
+  --lift: drop-shadow(0 2px 2px rgba(27, 28, 31, 0.12))
+    drop-shadow(0 10px 14px rgba(27, 28, 31, 0.16));
 
   cursor: grabbing;
 }
 
 .sticker__art,
+.sticker__lit,
 .sticker__holo,
 .sticker__glare {
   position: absolute;
   inset: 0;
 }
 
-.sticker__art {
-  background-image: var(--art);
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
+/*
+ * Holds the inlined <svg>. Without a size it draws at its own intrinsic one —
+ * 458px, 944px — instead of the box it is sitting in.
+ */
+.sticker__art > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/*
+ * The normal-mapped relief, in two passes.
+ *
+ * `overlay` reached its contrast by pulling the backdrop toward black and white
+ * and dragged saturation along with it — the artwork went garish. Multiplying
+ * by a grey scales R, G and B by the same factor instead, which moves lightness
+ * and leaves hue and saturation exactly where they were; `screen` is the same
+ * bargain at the other end. So the shading arrives as one layer that darkens
+ * what faces away and one that lifts what faces the light, and neither touches
+ * the colour.
+ */
+.sticker__lit {
+  width: 100%;
+  height: 100%;
+  -webkit-mask-image: var(--art);
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-image: var(--art);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  pointer-events: none;
+}
+
+.sticker__lit--shade {
+  mix-blend-mode: multiply;
+}
+
+.sticker__lit--sheen {
+  mix-blend-mode: screen;
 }
 
 /*
  * The rainbow, cut twice over: once to the sticker's silhouette and once to the
- * light band, which is the `mode="luminance"` mask in the original — a CSS mask
- * reads alpha rather than luminance, so the band carries its brightness as
+ * light. That second cut is the `mode="luminance"` mask in the original — a CSS
+ * mask reads alpha rather than luminance, so the disc carries its brightness as
  * alpha and lands in the same place.
  */
 .sticker__holo {
   -webkit-mask-image: var(--art),
-    linear-gradient(
-      var(--sweep),
-      rgba(255, 255, 255, 0) 0%,
-      rgba(255, 255, 255, 0.8) 38%,
-      rgba(255, 255, 255, 0.18) 50%,
-      rgba(255, 255, 255, 0.7) 62%,
-      rgba(255, 255, 255, 0) 100%
+    radial-gradient(
+      circle at var(--gx) var(--gy),
+      rgba(255, 255, 255, 0.9) 0%,
+      rgba(255, 255, 255, 0.4) 32%,
+      rgba(255, 255, 255, 0) 68%
     );
-  -webkit-mask-size: contain, 200% 200%;
-  -webkit-mask-position: center, var(--gx, 50%) var(--gy, 50%);
+  -webkit-mask-size: contain, 100% 100%;
+  -webkit-mask-position: center, center;
   -webkit-mask-repeat: no-repeat, no-repeat;
   -webkit-mask-composite: source-in;
   mask-image: var(--art),
-    linear-gradient(
-      var(--sweep),
-      rgba(255, 255, 255, 0) 0%,
-      rgba(255, 255, 255, 0.8) 38%,
-      rgba(255, 255, 255, 0.18) 50%,
-      rgba(255, 255, 255, 0.7) 62%,
-      rgba(255, 255, 255, 0) 100%
+    radial-gradient(
+      circle at var(--gx) var(--gy),
+      rgba(255, 255, 255, 0.9) 0%,
+      rgba(255, 255, 255, 0.4) 32%,
+      rgba(255, 255, 255, 0) 68%
     );
-  mask-size: contain, 200% 200%;
-  mask-position: center, var(--gx, 50%) var(--gy, 50%);
+  mask-size: contain, 100% 100%;
+  mask-position: center, center;
   mask-repeat: no-repeat, no-repeat;
   mask-composite: intersect;
   background-image: linear-gradient(
-    var(--sweep),
+    135deg,
     #ff3b30,
     #ff9500,
     #ffcc00,
@@ -327,39 +372,91 @@ html {
     #ff3b30
   );
   background-size: 200% 200%;
-  background-position: var(--gx, 50%) var(--gy, 50%);
+  background-position: var(--gx) var(--gy);
   /*
    * Blur runs before masking in the CSS rendering model, so this softens the
    * boundaries between the rainbow's stops without touching the silhouette the
    * mask cuts — the edge stays as crisp as the artwork.
    */
-  filter: blur(calc(7px * var(--sticker-scale, 1)));
+  filter: blur(calc(8px * var(--sticker-scale, 1)));
+  opacity: 0.55;
   mix-blend-mode: overlay;
   pointer-events: none;
 }
 
-/* The plain sheen the reference lays over everything, at its weaker stops. */
+/* The plain sheen over the top, as a disc and kept faint. */
 .sticker__glare {
-  mask-image: var(--art);
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
   -webkit-mask-image: var(--art);
   -webkit-mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-position: center;
-  background-image: linear-gradient(
-    var(--sweep),
-    rgba(255, 255, 255, 0) 0%,
-    rgba(255, 255, 255, 0.3) 38%,
-    rgba(255, 255, 255, 0.07) 50%,
-    rgba(255, 255, 255, 0.2) 62%,
-    rgba(255, 255, 255, 0) 100%
+  mask-image: var(--art);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  background-image: radial-gradient(
+    circle at var(--gx) var(--gy),
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.08) 34%,
+    rgba(255, 255, 255, 0) 66%
   );
-  background-size: 200% 200%;
-  background-position: var(--gx, 50%) var(--gy, 50%);
-  filter: blur(calc(5px * var(--sticker-scale, 1)));
+  filter: blur(calc(6px * var(--sticker-scale, 1)));
   pointer-events: none;
+}
+
+/*
+ * Stands in for the cursor over a sticker that has a label. Same outline and
+ * corner as the inventory tile, without its checker bed or icon.
+ *
+ * The corner is drawn in pixels by components/Stickers rather than with the
+ * tile's objectBoundingBox path: that one only holds its shape on a square, and
+ * this is as wide as its text.
+ */
+.hint {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 24px;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.hint__frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hint__frame path {
+  stroke: var(--outline);
+}
+
+.hint__text {
+  position: relative;
+  font: 700 14px / 1 var(--font-mono);
+  letter-spacing: -0.01em;
+  color: var(--outline);
+}
+
+.hint__arrow {
+  position: relative;
+  width: 15px;
+  height: auto;
+  /* arrow.svg points left; this one is going somewhere. */
+  transform: scaleX(-1);
+  opacity: 0.55;
+}
+
+/* The drawn cursor steps aside while the label is doing its job. */
+body:has(.hint) .custom-cursor {
+  opacity: 0 !important;
 }
 
 .custom-cursor {
@@ -379,29 +476,38 @@ html {
   will-change: transform;
 }
 
-.action-bar {
+/*
+ * The two controls that are left, both sized off --ui like the buttons they
+ * replace. The pickers sit at the left and right edges, vertically centred; the
+ * zoom mark is up in the top right.
+ */
+.pick {
   position: absolute;
-  left: calc(var(--ui) * 0.167);
   top: 50%;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--ui) * 0.095);
-  transform: translateY(-50%);
-}
-
-.action-btn {
+  z-index: 8;
   margin: 0;
   padding: 0;
   border: 0;
-  background: transparent;
   width: calc(var(--ui) * 0.43);
   height: calc(var(--ui) * 0.43);
-  line-height: 0;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  transition: opacity 140ms ease;
 }
 
-.action-btn img {
-  display: block;
+.pick--prev {
+  left: calc(var(--ui) * 0.167);
+}
+
+.pick--next {
+  right: calc(var(--ui) * 0.167);
+}
+
+.pick__orb {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -409,40 +515,81 @@ html {
   user-select: none;
 }
 
-.action-btn[aria-pressed='true'] {
-  filter: brightness(1.12);
-}
-
-.action-btn:active {
-  transform: scale(0.94);
-}
-
-/* Bottom-right. Same inset off both edges that .action-bar keeps off its own. */
 /*
- * The tray: arrows either side of one square window. The window is a single
- * canvas holding the whole ring, so there is no rail, no sliding track and no
- * per-slot cell any more — the turntable in components/Inventory does that
- * work in 3D, and the stations that are not at the front simply fall outside
- * this frame.
+ * Sits in the orb where the < > glyphs used to. Nudged up because the orb's
+ * highlight sits high and centring on the box reads as low.
  *
- * Square on purpose: .inventory__ground and .inventory__frame clip with an
- * objectBoundingBox path, which skews its corners on anything oblong.
+ * The flip is a variable rather than a second transform: the mirrored side
+ * would otherwise have to restate the nudge, and the two would drift.
+ */
+.pick__art {
+  --flip: 1;
+
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 34%;
+  height: auto;
+  opacity: 0.43;
+  transform: translateY(-12%) scaleX(var(--flip));
+  pointer-events: none;
+  user-select: none;
+}
+
+/* arrow.svg points left, so the other side is the same file mirrored. */
+.pick--next .pick__art {
+  --flip: -1;
+}
+
+.pick:hover:not(:disabled) .pick__orb {
+  filter: brightness(1.06);
+}
+
+.pick:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.94);
+}
+
+.pick:disabled {
+  opacity: 0.22;
+}
+
+.pick {
+  transition:
+    opacity 220ms ease,
+    transform 140ms ease;
+}
+
+/*
+ * The tool tile, bottom right. It shows whatever Kare is holding and nothing
+ * when her hands are empty — the picking is on the arrows now, so this is a
+ * readout rather than a control.
  */
 .inventory {
   --cell: var(--ui);
-  --gap: calc(var(--ui) * 0.06);
-  --view: calc(var(--cell) * 2.8);
-  --aside: 0.6;
-  --aside-fade: 0.32;
 
-  position: relative;
-  z-index: 6;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  position: absolute;
+  right: calc(var(--ui) * 0.167);
+  bottom: calc(var(--ui) * 0.167);
+  z-index: 8;
+  width: var(--cell);
+  height: var(--cell);
   user-select: none;
   -webkit-user-select: none;
+  pointer-events: none;
+}
+
+/*
+ * Dimmed for the face zoom, the way the arrows already go when they cannot be
+ * pressed — the picking is meaningless while the camera is on her face.
+ */
+.inventory.is-dim {
+  opacity: 0.22;
+  pointer-events: none;
+}
+
+.inventory,
+.inventory.is-dim {
+  transition: opacity 220ms ease;
 }
 
 .inventory__defs {
@@ -451,155 +598,23 @@ html {
   height: 0;
 }
 
-.inventory__rail {
-  position: relative;
-  display: flex;
-  justify-content: center;
-}
-
-.inventory__arrow {
-  position: absolute;
-  top: 50%;
-  z-index: 1;
-  margin: 0;
-  padding: 0 0 3px;
-  border: 0;
-  width: calc(var(--cell) * 0.21);
-  height: calc(var(--cell) * 0.21);
-  background: transparent;
-  color: var(--fg);
-  font: 400 calc(var(--cell) * 0.13) / 1 var(--font-ui);
-  transform: translateY(-50%);
-  transition: opacity 140ms ease;
-}
-
-.inventory__arrow-orb {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  pointer-events: none;
-  user-select: none;
-}
-
-.inventory__arrow-glyph {
-  position: relative;
-  z-index: 1;
-  display: block;
-  transform: translateY(-5.6%);
-}
-
-.inventory__arrow.is-prev {
-  right: calc(50% + var(--cell) / 2 + var(--cell) * 0.048);
-}
-
-.inventory__arrow.is-next {
-  left: calc(50% + var(--cell) / 2 + var(--cell) * 0.048);
-}
-
-.inventory__arrow:hover:not(:disabled) .inventory__arrow-orb {
-  filter: brightness(1.06);
-}
-
-.inventory__arrow:active:not(:disabled) {
-  transform: translateY(-50%) scale(0.94);
-}
-
-.inventory__arrow:disabled {
-  opacity: 0.22;
-}
-
-.inventory__viewport {
-  position: relative;
-  width: var(--view);
-  height: var(--cell);
-  overflow: hidden;
-}
-
-.inventory__track {
-  position: absolute;
-  inset: 0;
-  transform: translateX(calc(var(--slide) * (var(--cell) + var(--gap))));
-  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.inventory__track.is-jumped {
-  transition: none;
-}
-
-.inventory__cell {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: var(--cell);
-  height: 100%;
-  margin-left: calc(var(--cell) / -2);
-  transform: translateX(calc(var(--d) * (var(--cell) + var(--gap))));
-}
-
-.inventory__lift {
-  width: 100%;
-  height: 100%;
-  opacity: var(--aside-fade);
-  transform: scale(var(--aside));
-  pointer-events: none;
-  transition:
-    opacity 300ms ease,
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.inventory__lift.is-center {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-}
-
-.inventory__unknown {
-  display: grid;
-  place-items: center;
-}
-
-.inventory__mark {
-  width: calc(var(--cell) * 0.42);
-  height: auto;
-  transform: translateX(6%);
-  filter:
-    drop-shadow(0 0 calc(var(--cell) * 0.015) rgba(255, 255, 255, 0.95))
-    drop-shadow(0 0 calc(var(--cell) * 0.05) rgba(255, 255, 255, 0.6));
-  pointer-events: none;
-  user-select: none;
-}
-
-.inventory__mark-edge path {
-  fill: #ffffff;
-  stroke: #ffffff;
-  stroke-width: 34;
-  stroke-linejoin: round;
-}
-
-.inventory__mark-body path {
-  fill: #d5d7db;
-}
-
-.inventory__slot {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  width: var(--cell);
-  height: var(--cell);
-  margin-left: calc(var(--cell) / -2);
-}
-
+/*
+ * Carries the squircle clip, so the gradient and the checkers over it both take
+ * the tile's shape. Opaque: the canvas behind must not read through it.
+ */
 .inventory__ground {
   position: absolute;
   inset: 0;
   clip-path: url(#inventory-squircle);
   background: linear-gradient(to bottom, var(--ground-top), var(--ground-bottom));
-  pointer-events: none;
-  user-select: none;
 }
 
+/*
+ * The tile is two cells wide and the element is scaled 2x, and those cancel:
+ * background-size is exactly the size one cell comes out on screen. scale(2)
+ * also pays for the rotation — a 2x square turned 30° about its centre still
+ * contains the tile, so the repeat never runs out at a corner.
+ */
 .inventory__ground-art {
   --tile: calc(var(--cell) * 0.095);
 
@@ -618,20 +633,16 @@ html {
   width: 100%;
   height: 100%;
   fill: none;
-  stroke: #b4b5b8;
+  stroke: var(--outline);
   stroke-width: 8;
   clip-path: url(#inventory-squircle);
   vector-effect: non-scaling-stroke;
-  transition:
-    fill 140ms ease,
-    stroke 140ms ease;
 }
 
 .inventory__item {
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 1;
-  width: 100%;
-  height: 100%;
   clip-path: url(#inventory-squircle);
 }
 
@@ -660,19 +671,67 @@ html {
   animation: inventory-float 2.2s ease-in-out infinite alternate;
 }
 
-/* Offsets, so the row does not breathe in lockstep. */
-.inventory__cell:nth-child(2) .inventory__art {
-  animation-delay: -0.7s;
-}
-
-.inventory__cell:nth-child(3) .inventory__art {
-  animation-delay: -1.4s;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .inventory__art {
     animation: none;
   }
+}
+
+/*
+ * The empty-hands mark: the question mark's colour and glow, on the tool shape.
+ * Still, rather than floating like a thumbnail, so it reads as a placeholder
+ * and not as something being carried.
+ */
+.inventory__empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 52%;
+  height: 52%;
+  transform: translate(-50%, -50%);
+  fill: #d5d7db;
+  filter:
+    drop-shadow(0 0 calc(var(--cell) * 0.015) rgba(255, 255, 255, 0.95))
+    drop-shadow(0 0 calc(var(--cell) * 0.05) rgba(255, 255, 255, 0.6));
+  pointer-events: none;
+  user-select: none;
+}
+
+.zoom {
+  position: absolute;
+  top: calc(var(--ui) * 0.167);
+  right: calc(var(--ui) * 0.167);
+  z-index: 8;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  width: calc(var(--ui) * 0.43);
+  height: calc(var(--ui) * 0.43);
+  background: transparent;
+  transition: transform 140ms ease;
+}
+
+.zoom:active {
+  transform: scale(0.94);
+}
+
+/*
+ * Bloom only. The mark used to carry a white stroke ringing it as well; this is
+ * the glow that was under it, on its own.
+ */
+.zoom__mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: #d5d7db;
+  filter:
+    drop-shadow(0 0 calc(var(--ui) * 0.015) rgba(255, 255, 255, 0.95))
+    drop-shadow(0 0 calc(var(--ui) * 0.05) rgba(255, 255, 255, 0.6));
+  pointer-events: none;
+}
+
+.zoom[aria-pressed='true'] .zoom__mark {
+  fill: #ffffff;
 }
 
 .deck {

@@ -98,6 +98,7 @@ const _between = new THREE.Vector3();
 
 export type KareHandle = {
   playVsign: () => void;
+  faceFront: (seconds: number) => void;
   setMode: (mode: KareMode) => boolean;
   toggleDs: () => boolean;
 };
@@ -202,6 +203,12 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     return action.getClip().duration;
   };
 
+  /** Hold her looking at the camera for a beat, eyes and neck both. */
+  const faceFront = (seconds: number) => {
+    rig.current?.resetLook();
+    gazeUntil.current = performance.now() + (seconds + GAZE_HOLD) * 1000;
+  };
+
   const wink = (seconds: number) => {
     rig.current?.setWink(true);
     winkUntil.current = performance.now() + (seconds + WINK_HOLD) * 1000;
@@ -233,13 +240,12 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
   };
 
   useImperativeHandle(ref, () => ({
+    faceFront,
     playVsign() {
       const seconds = oneShot('vsign', mode.current, FADE);
       if (!seconds) return;
       vsignCue.current = true;
-
-      rig.current?.resetLook();
-      gazeUntil.current = performance.now() + (seconds + GAZE_HOLD) * 1000;
+      faceFront(seconds);
     },
     setMode,
     toggleDs() {
@@ -560,8 +566,14 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     if (headYaw !== 0 || headPitch !== 0) {
       const l = look.current;
       const alpha = 1 - Math.exp(-dt / HEAD_RESPONSE);
-      l.x += (l.tx - l.x) * alpha;
-      l.y += (l.ty - l.y) * alpha;
+      /*
+       * While a gaze is held, the head goes with the eyes. gazeUntil used to
+       * gate only the face rig, so the pointer kept turning the neck under it —
+       * she looked front while facing away.
+       */
+      const held = gazeUntil.current !== 0;
+      l.x += ((held ? 0 : l.tx) - l.x) * alpha;
+      l.y += ((held ? 0 : l.ty) - l.y) * alpha;
 
       const pitch = l.y * headPitch * (l.y < 0 ? PITCH_UP_GAIN : 1);
       for (const { bone, weight } of tracked) {

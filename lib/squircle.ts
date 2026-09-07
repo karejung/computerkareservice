@@ -12,8 +12,7 @@
  *
  * Unlike a `clipPathUnits="objectBoundingBox"` path, this takes real width and
  * height, so the corners come out the same size on both axes however oblong
- * the box is. That is the whole reason it exists: the inventory tile is square
- * and could get away with the unit path, the stage cannot.
+ * the box is — which a unit path cannot do on anything but a square.
  *
  * tools/squircle.mjs prints paths from this same construction, and was checked
  * against the hand-authored path this replaced: s = 0.6, reach = 60.324 on a
@@ -23,7 +22,7 @@
 /** Figma's corner smoothing slider, 0..1. 1 is the 100% end. */
 export const CORNER_SMOOTHING = 1;
 
-/** Corner reach as a fraction of the inventory tile's side. */
+/** Corner reach as a fraction of --ui, the UI's base unit. */
 export const CORNER_REACH_RATIO = 60.324 / 128;
 
 const rad = (deg: number) => (deg * Math.PI) / 180;

@@ -10,6 +10,8 @@ import * as THREE from 'three';
 import { asset } from '@/lib/asset';
 import { Kare, type KareHandle, type KareMode } from './Kare';
 import { Inventory, type InventoryHandle } from './Inventory';
+import { Stickers } from './Stickers';
+import { ZoomButton } from './ZoomButton';
 import { SquircleCard } from './SquircleCard';
 import { Bloom } from './Bloom';
 import { PuffBurst, type PuffBurstHandle } from './PuffBurst';
@@ -18,7 +20,7 @@ import { StarSpiral, type StarSpiralHandle } from './StarSpiral';
 const CURSOR_DEFAULT = { src: asset('/cursors/cursor.png'), x: 3, y: 1 };
 const CURSOR_POINTER = { src: asset('/cursors/pointer.png'), x: 8, y: 0 };
 const POINTER_TARGET =
-  'a, button, [role="button"], input, select, textarea, label, summary, .action-btn, .sticker';
+  'a, button, [role="button"], input, select, textarea, label, summary, .pick, .zoom, .sticker';
 
 /*
  * Portalled to <body> rather than left in .scene-root, because .split__stage
@@ -124,6 +126,9 @@ const GREY = '#e0e0e0';
 const WHITE = '#ffffff';
 const BLACK = '#377cf6';
 
+/** Seconds the zoom and V buttons hold her looking at the camera. */
+const FRONT_HOLD = 1.2;
+
 const CHECKER_SIZE = 0.5;
 const CHECKER_CELLS = 16;
 const FLOOR_SIZE = 2.8;
@@ -179,10 +184,13 @@ function GroundAndFit({
   group,
   floor,
   home,
+  front,
 }: {
   group: React.RefObject<THREE.Group | null>;
   floor: React.RefObject<THREE.Mesh | null>;
   home: React.MutableRefObject<CameraShot | null>;
+  /** Same nonce CameraFocus takes; clears the remembered orbit with it. */
+  front: number;
 }) {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
@@ -213,6 +221,11 @@ function GroundAndFit({
    * the user has dragged, the direction they left the camera on is remembered
    * and the refit re-uses it; only the distance is recomputed.
    */
+  useEffect(() => {
+    orbited.current = false;
+    facing.current.copy(BODY_DIR);
+  }, [front]);
+
   useEffect(() => {
     if (controls && orbited.current) {
       facing.current.copy(camera.position).sub(controls.target).normalize();
@@ -328,10 +341,17 @@ function CameraFocus({
   group,
   home,
   face,
+  front,
 }: {
   group: React.RefObject<THREE.Group | null>;
   home: React.RefObject<CameraShot | null>;
   face: boolean;
+  /*
+   * Bumped by whichever button was pressed. Both of them put her back
+   * front-on — an orbit is a thing you did to look around, not a viewpoint the
+   * app should keep honouring once you ask it to do something.
+   */
+  front: number;
 }) {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
@@ -344,12 +364,9 @@ function CameraFocus({
 
     if (!face) {
       goalTarget.current.copy(home.current.target);
-      const dir = camera.position.clone().sub(controls.target);
-      if (dir.lengthSq() < 1e-8) dir.copy(home.current.dir);
-      else dir.normalize();
       goalPos.current
         .copy(home.current.target)
-        .addScaledVector(dir, home.current.distance);
+        .addScaledVector(home.current.dir, home.current.distance);
       controls.minDistance = home.current.minDistance;
       controls.maxDistance = home.current.maxDistance;
     } else {
@@ -375,8 +392,7 @@ function CameraFocus({
 
       goalTarget.current.y -= extent.y * FACE_DROP;
 
-      const dir = camera.position.clone().sub(controls.target).normalize();
-      goalPos.current.copy(goalTarget.current).addScaledVector(dir, distance);
+      goalPos.current.copy(goalTarget.current).addScaledVector(home.current.dir, distance);
 
       controls.minDistance = Math.min(home.current.minDistance, distance * 0.5);
       controls.maxDistance = home.current.maxDistance;
@@ -389,7 +405,7 @@ function CameraFocus({
 
     controls.enabled = false;
     moving.current = true;
-  }, [face, camera, controls, group, home]);
+  }, [face, front, camera, controls, group, home]);
 
   useFrame((_, dt) => {
     if (!moving.current || !controls) return;
@@ -501,7 +517,12 @@ function Floor({
   );
 }
 
-export default function Scene() {
+export default function Scene({
+  onVsign,
+}: {
+  /* Unused now that the sticker layer lives in here; kept off the page. */
+  onVsign?: never;
+}) {
   const [faceZoom, setFaceZoom] = useState(false);
   const model = useRef<THREE.Group>(null);
   const floor = useRef<THREE.Mesh>(null);
@@ -514,6 +535,11 @@ export default function Scene() {
   const [wanted, setWanted] = useState<KareMode>('idle');
   const inventory = useRef<InventoryHandle>(null);
   const [busy, setBusy] = useState(false);
+  /*
+   * Both buttons go through goEmpty, so bumping this there is the same as
+   * saying "the zoom and the V sign put her back front-on".
+   */
+  const [front, setFront] = useState(0);
 
   const pendingAction = useRef<(() => void) | null>(null);
 
@@ -532,6 +558,10 @@ export default function Scene() {
 
   const goEmpty = (then: () => void) => {
     if (busy) return;
+    setFront((n) => n + 1);
+    // Long enough to cover the camera move; after it she picks the pointer up
+    // again on its next move.
+    kare.current?.faceFront(FRONT_HOLD);
     inventory.current?.toEmpty();
     if (mode === 'idle') {
       then();
@@ -599,8 +629,8 @@ export default function Scene() {
             minPolarAngle={MIN_POLAR}
             maxPolarAngle={MAX_POLAR}
           />
-          <GroundAndFit group={model} floor={floor} home={home} />
-          <CameraFocus group={model} home={home} face={faceZoom} />
+          <GroundAndFit group={model} floor={floor} home={home} front={front} />
+          <CameraFocus group={model} home={home} face={faceZoom} front={front} />
 
           <Bloom
             enabled={LOOK.bloom}
@@ -611,38 +641,33 @@ export default function Scene() {
         </Canvas>
 
         <CustomCursor />
-
-        <div className="action-bar">
-          <button
-            type="button"
-            className="action-btn"
-            aria-label="V sign"
-            onClick={() => goEmpty(() => kare.current?.playVsign())}
-          >
-            <img src={asset('/image/vbutton.png')} alt="" draggable={false} />
-          </button>
-          <button
-            type="button"
-            className="action-btn"
-            aria-label={faceZoom ? 'Full body' : 'Face zoom'}
-            aria-pressed={faceZoom}
-            onClick={() => goEmpty(() => setFaceZoom((v) => !v))}
-          >
-            <img src={asset('/image/cambutton.png')} alt="" draggable={false} />
-          </button>
-        </div>
       </SquircleCard>
+
+      {/*
+        * Order matters here, and so does being outside the card. The three
+        * layers stack canvas < stickers < controls, and z-index can only order
+        * them against each other inside one stacking context — .split__stage
+        * establishes its own, so a sticker layer up at page level could never
+        * be slipped under controls that lived in the card.
+        */}
+      <Stickers
+        swept={faceZoom}
+        holding={mode}
+        onVsign={() => goEmpty(() => kare.current?.playVsign())}
+      />
+
+      <ZoomButton active={faceZoom} onToggle={() => goEmpty(() => setFaceZoom((v) => !v))} />
 
       <Inventory
         ref={inventory}
         busy={busy}
+        dimmed={faceZoom}
         onArrow={onArrow}
         onSettled={() => {
           if (mode === wanted) setBusy(false);
         }}
         onSelect={(kind) => setWanted(kind === 'unknown' ? 'idle' : kind)}
       />
-
     </div>
   );
 }

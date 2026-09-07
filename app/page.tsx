@@ -2,7 +2,6 @@
 
 import dynamic from 'next/dynamic';
 
-import { Stickers } from '@/components/Stickers';
 
 const Scene = dynamic(() => import('@/components/Scene'), { ssr: false });
 
@@ -25,7 +24,6 @@ export default function Page() {
         <Scene />
       </section>
 
-      <Stickers />
     </main>
   );
 }
