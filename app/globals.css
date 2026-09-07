@@ -281,6 +281,19 @@ html {
   cursor: grabbing;
 }
 
+/*
+ * A press that has been held long enough to count as a click. Touch only —
+ * there is no click to wait for on a mouse — and it has to say so before the
+ * finger lifts, because lifting is what spends it. Picked up off the ground
+ * rather than pushed into it: the same lift .is-held gives, further.
+ */
+.sticker.is-armed {
+  --lift: drop-shadow(0 3px 3px rgba(27, 28, 31, 0.14))
+    drop-shadow(0 16px 22px rgba(27, 28, 31, 0.2));
+
+  transition: filter 120ms ease;
+}
+
 .sticker__art,
 .sticker__lit,
 .sticker__holo,

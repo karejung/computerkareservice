@@ -37,6 +37,16 @@ export type TwoToneUniforms = {
   uSplit: { value: number };
   uSoft: { value: number };
   uShadeDir: { value: THREE.Vector3 };
+  /*
+   * How far the terminator is allowed to stop caring about the mesh. Both are
+   * 0..1 and both work off uOrigin, the centre of whatever the material is
+   * drawn on, in world space; uSpan is the distance over which uSweep crosses
+   * from one tone to the other.
+   */
+  uRound: { value: number };
+  uSweep: { value: number };
+  uOrigin: { value: THREE.Vector3 };
+  uSpan: { value: number };
 };
 
 const SHADE_SOFT = 0.07;
@@ -65,11 +75,32 @@ export function createTwoToneMaterial(
     uSplit: { value: 0.15 },
     uSoft: { value: SHADE_SOFT },
     uShadeDir: { value: new THREE.Vector3(0.5, 0.6, 0.6).normalize() },
+    uRound: { value: 0 },
+    uSweep: { value: 0 },
+    uOrigin: { value: new THREE.Vector3() },
+    uSpan: { value: 1 },
   };
   material.userData.uniforms = uniforms;
 
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
+
+    /*
+     * World position, taken after skinning — `transformed` is only final by the
+     * time <project_vertex> is reached, and on these meshes everything before
+     * it is the mixer moving the bones.
+     */
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vShadePos;`,
+      )
+      .replace(
+        '#include <project_vertex>',
+        `vShadePos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+        #include <project_vertex>`,
+      );
 
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -78,14 +109,49 @@ export function createTwoToneMaterial(
         uniform vec3 uShade;
         uniform float uSplit;
         uniform float uSoft;
-        uniform vec3 uShadeDir;`,
+        uniform vec3 uShadeDir;
+        uniform float uRound;
+        uniform float uSweep;
+        uniform vec3 uOrigin;
+        uniform float uSpan;
+        varying vec3 vShadePos;`,
       )
       .replace(
         '#include <opaque_fragment>',
         `{
-          // uShadeDir is authored in world space, the normal is in view space.
-          vec3 shadeDir = normalize( mat3( viewMatrix ) * uShadeDir );
-          float facing = dot( normalize( normal ), shadeDir );
+          /*
+           * uShadeDir and uOrigin are authored in world space and the normal
+           * arrives in view space. mat3( viewMatrix ) is a pure rotation here,
+           * so multiplying the normal from the right applies its transpose and
+           * takes it back out to world rather than dragging the other two in.
+           */
+          vec3 worldNormal = normalize( normal * mat3( viewMatrix ) );
+          vec3 fromCentre = vShadePos - uOrigin;
+
+          /*
+           * Two ways of forgetting the mesh, and the terminator is mixed
+           * between them and the plain surface normal.
+           *
+           * uRound bends the normal toward the one a sphere around uOrigin
+           * would have. This is what takes the lumps out: on a model this
+           * low-poly the normals step from facet to facet, so the boundary
+           * steps with them, and a normal that varies smoothly across the body
+           * gives a boundary that does too — still the same form, just without
+           * the grain of the polygons showing through it.
+           *
+           * uSweep drops the surface entirely and cuts on a plane straight
+           * through uOrigin, square to the light. Nothing about how a face is
+           * turned matters any more, only where it is, so the edge runs dead
+           * straight across her — a shadow drawn on, rather than one worked
+           * out. That is the graphic end of the dial and it is the reason the
+           * epsilon below exists: dead centre, fromCentre is zero.
+           */
+          vec3 rounded = normalize(
+            mix( worldNormal, normalize( fromCentre + vec3( 1e-5 ) ), uRound ) );
+          float lambert = dot( rounded, uShadeDir );
+          float sweep = dot( fromCentre, uShadeDir ) / max( uSpan, 1e-4 );
+
+          float facing = mix( lambert, sweep, uSweep );
 
           /*
            * Where the shadow ends, softened twice over.
@@ -119,7 +185,7 @@ export function createTwoToneMaterial(
       );
   };
 
-  material.customProgramCacheKey = () => 'two-tone-v3';
+  material.customProgramCacheKey = () => 'two-tone-v4';
 
   return material;
 }

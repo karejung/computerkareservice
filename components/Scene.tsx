@@ -90,6 +90,8 @@ type Look = {
   shadeSplit: number;
   shadeAngle: number;
   shadeHeight: number;
+  shadeRound: number;
+  shadeSweep: number;
   headYaw: number;
   headPitch: number;
 
@@ -146,6 +148,16 @@ const LOOK: Look = {
   shadeSplit: 0.05,
   shadeAngle: 44,
   shadeHeight: 30,
+  /*
+   * How much of the terminator is drawn rather than lit, on the t-shirt and the
+   * shoes — the nodes listed in Kare's SWEPT_NODES, and nowhere else. Round
+   * takes the polygon grain out of the edge, sweep runs it straight across the
+   * garment; between them it is one long clean line instead of a boundary
+   * picking its way over facets. Both off is the old surface-normal shading,
+   * both at 1 is a flat diagonal cut with no form left in it at all.
+   */
+  shadeRound: 0.55,
+  shadeSweep: 0.45,
   headYaw: 0.4,
   headPitch: 0.1,
 
@@ -413,8 +425,21 @@ function CameraFocus({
     const k = 1 - Math.exp(-dt * 5);
     camera.position.lerp(goalPos.current, k);
     controls.target.lerp(goalTarget.current, k);
+    /*
+     * Nothing else turns the camera while this runs. drei calls
+     * controls.update() only while the controls are enabled, and they are off
+     * for the whole flight, so the camera held whatever orientation the orbit
+     * had left it in and swung onto the new one in a single frame on arrival —
+     * the further round you had dragged, the further off the move looked. This
+     * is the lookAt update() itself ends on, so handing back to the controls
+     * lands on the rotation they were already going to keep.
+     */
+    camera.lookAt(controls.target);
 
-    if (camera.position.distanceToSquared(goalPos.current) < 1e-6) {
+    if (
+      camera.position.distanceToSquared(goalPos.current) < 1e-6 &&
+      controls.target.distanceToSquared(goalTarget.current) < 1e-6
+    ) {
       camera.position.copy(goalPos.current);
       controls.target.copy(goalTarget.current);
       controls.update();
@@ -600,6 +625,8 @@ export default function Scene({
                 shadeSplit={LOOK.shadeSplit}
                 shadeAngle={LOOK.shadeAngle}
                 shadeHeight={LOOK.shadeHeight}
+                shadeRound={LOOK.shadeRound}
+                shadeSweep={LOOK.shadeSweep}
                 headYaw={LOOK.headYaw}
                 headPitch={LOOK.headPitch}
                 onModeChange={setMode}

@@ -17,7 +17,11 @@ import {
   PROP_ROOTS,
   type PropKind,
   type TwoToneMaterial,
+  type TwoToneUniforms,
 } from '@/lib/twoTone';
+
+/** A node shading off its own centre, and the uniforms that carry it. */
+type SweptMesh = { mesh: THREE.Mesh; uniforms: TwoToneUniforms };
 
 export const GLB_URL = asset('/models/kare9.glb');
 
@@ -53,6 +57,14 @@ const BLUSH_MATERIAL = key('blush');
 const BLUSH_RENDER_ORDER = 10;
 
 const TINTED_NODES = new Set(['hair', 'FACE', 'pants', 'SHOEL', 'SHOER'].map(key));
+/*
+ * Of those, the ones that are volume rather than marking. Hair, trousers and
+ * shoes take the same two-tone break the console and the white body already
+ * carry, so they sit in one light with the rest of her instead of reading as
+ * flat cutouts pasted on top. FACE stays flat on purpose — that slot is
+ * drawing, not form, and a terminator across it would be a smudge.
+ */
+const TINT_LIT_NODES = new Set(['hair', 'pants', 'SHOEL', 'SHOER'].map(key));
 
 const HEAD_TRACK = [
   { node: key('mixamorig:Neck'), weight: 0.35 },
@@ -60,6 +72,25 @@ const HEAD_TRACK = [
 ];
 const HEAD_RESPONSE = 0.12;
 const PITCH_UP_GAIN = 2.0;
+
+/*
+ * The nodes whose terminator is drawn rather than lit — shadeRound and
+ * shadeSweep, both of which need a centre to work from. The t-shirt and the
+ * shoes are the broad smooth panels where the polygon grain showed worst;
+ * everything else keeps shading off its own normals.
+ *
+ * Each of these gets a material to itself. The centre and the reach are per
+ * node and a material is shared, so one instance could only ever carry one
+ * plane — and a plane hung off the left shoe misses the right one entirely.
+ */
+const SWEPT_NODES = new Set(['top', 'SHOEL', 'SHOER'].map(key));
+
+/*
+ * Vertices sampled per mesh per frame to find that centre. It only has to be
+ * good enough to hang a plane off, and these are small meshes, so a fixed
+ * budget spread over the whole buffer beats reading all of it.
+ */
+const SHADE_SAMPLES = 160;
 
 const LIT_MATERIAL = key('white');
 const FACE_MATERIAL = key('face.002');
@@ -87,11 +118,47 @@ function createFlatMaterial(source: THREE.Material): THREE.MeshBasicMaterial {
   });
 }
 
+/*
+ * Where a posed mesh is and how far it reaches along `dir`, both in world
+ * space. The reach is the box's exact half-extent in that direction, so the
+ * sweep crosses from one tone to the other over precisely the object it is
+ * cutting rather than over a guess at its size.
+ */
+function poseSpan(mesh: THREE.Mesh, dir: THREE.Vector3, centre: THREE.Vector3): number {
+  const position = mesh.geometry?.getAttribute('position');
+  if (!position) return 0;
+
+  const skinned = mesh as THREE.SkinnedMesh;
+  const step = Math.max(1, Math.floor(position.count / SHADE_SAMPLES));
+
+  mesh.updateWorldMatrix(true, false);
+  _shadeBox.makeEmpty();
+  for (let i = 0; i < position.count; i += step) {
+    _shadeVertex.fromBufferAttribute(position, i);
+    if (skinned.isSkinnedMesh) skinned.applyBoneTransform(i, _shadeVertex);
+    _shadeBox.expandByPoint(_shadeVertex.applyMatrix4(mesh.matrixWorld));
+  }
+  if (_shadeBox.isEmpty()) return 0;
+
+  _shadeBox.getCenter(centre);
+  _shadeBox.getSize(_shadeSize);
+  return (
+    0.5 *
+    (_shadeSize.x * Math.abs(dir.x) +
+      _shadeSize.y * Math.abs(dir.y) +
+      _shadeSize.z * Math.abs(dir.z))
+  );
+}
+
 const _euler = new THREE.Euler();
 const _delta = new THREE.Quaternion();
 const _parent = new THREE.Quaternion();
 const _parentInverse = new THREE.Quaternion();
 const _shadeDir = new THREE.Vector3();
+const _shadeCentre = new THREE.Vector3();
+const _shadeSize = new THREE.Vector3();
+const _shadeVertex = new THREE.Vector3();
+const _shadeBox = new THREE.Box3();
 const _handL = new THREE.Vector3();
 const _handR = new THREE.Vector3();
 const _between = new THREE.Vector3();
@@ -109,6 +176,10 @@ export type KareProps = {
   shadeSplit?: number;
   shadeAngle?: number;
   shadeHeight?: number;
+  /** 0 keeps the mesh's own normals, 1 shades her as if she were a sphere. */
+  shadeRound?: number;
+  /** 0 leaves the terminator on the surface, 1 cuts it on a flat plane. */
+  shadeSweep?: number;
   headYaw?: number;
   headPitch?: number;
   onModeChange?: (mode: KareMode) => void;
@@ -124,6 +195,8 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     shadeSplit = 0.05,
     shadeAngle = 44,
     shadeHeight = 30,
+    shadeRound = 0.55,
+    shadeSweep = 0.45,
     headYaw = 0,
     headPitch = 0,
     onModeChange,
@@ -155,6 +228,9 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
   const vHands = useRef<{ hand: THREE.Object3D; tips: THREE.Object3D[] }[]>([]);
   const rig = useRef<FaceRig | null>(null);
   const tint = useRef<THREE.MeshBasicMaterial | null>(null);
+  /* One per swept node, so more than one can wear the tint. */
+  const tintLit = useRef<TwoToneMaterial[]>([]);
+  const swept = useRef<SweptMesh[]>([]);
   const propRoots = useRef<Partial<Record<PropKind, THREE.Object3D>>>({});
   const propScale = useRef<Partial<Record<PropKind, number>>>({});
   const propRadius = useRef<Partial<Record<PropKind, number>>>({});
@@ -279,9 +355,12 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
         if ((o as THREE.Mesh).isMesh) consoleMeshes.add(o);
       });
     }
+    const sweptMeshes: SweptMesh[] = [];
+    const tintLitMaterials: TwoToneMaterial[] = [];
     let litShared: TwoToneMaterial | null = null;
     let faceMaterial: TwoToneMaterial | null = null;
     let tinted: THREE.MeshBasicMaterial | null = null;
+    let tintedLit: TwoToneMaterial | null = null;
     const twoToneMaterials: TwoToneMaterial[] = [];
 
     const flats = new Map<THREE.Material, THREE.MeshBasicMaterial>();
@@ -293,7 +372,24 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
 
       const isFace = mesh === faceNode;
       const tintable = TINTED_NODES.has(key(mesh.name));
+      const tintLitNode = TINT_LIT_NODES.has(key(mesh.name));
+      const sweptNode = SWEPT_NODES.has(key(mesh.name));
       const slots = baseOf(mesh);
+
+      /*
+       * Same material as the shared one it stands in for, minus the sharing:
+       * this node is going to be given a centre of its own every frame.
+       */
+      const ownTone = (slot: THREE.Material) => {
+        const own = createTwoToneMaterial(slot.side);
+        own.name = `swept-${key(mesh.name)}`;
+        own.transparent = slot.transparent;
+        own.opacity = slot.opacity;
+        own.depthWrite = slot.depthWrite;
+        twoToneMaterials.push(own);
+        sweptMeshes.push({ mesh, uniforms: own.userData.uniforms });
+        return own;
+      };
 
       const swapped = slots.map((slot) => {
         const name = key(slot.name);
@@ -306,6 +402,7 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
             }
             return faceMaterial;
           }
+          if (sweptNode) return ownTone(slot);
           if (!litShared) {
             litShared = createTwoToneMaterial(slot.side);
             twoToneMaterials.push(litShared);
@@ -314,6 +411,29 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
         }
 
         if (name === TINT_MATERIAL && tintable) {
+          if (tintLitNode) {
+            /*
+             * The colour arrives from the emissive prop, same as the flat
+             * tint — the shader multiplies the tone into diffuseColor, so the
+             * two share one colour and differ only in whether the shadow side
+             * is taken off it.
+             */
+            if (sweptNode) {
+              const own = ownTone(slot);
+              tintLitMaterials.push(own);
+              return own;
+            }
+            if (!tintedLit) {
+              tintedLit = createTwoToneMaterial(slot.side);
+              tintedLit.name = 'tinted-lit';
+              tintedLit.transparent = slot.transparent;
+              tintedLit.opacity = slot.opacity;
+              tintedLit.depthWrite = slot.depthWrite;
+              twoToneMaterials.push(tintedLit);
+              tintLitMaterials.push(tintedLit);
+            }
+            return tintedLit;
+          }
           if (!tinted) {
             tinted = createFlatMaterial(slot);
             tinted.name = 'tinted';
@@ -357,7 +477,9 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     });
 
     twoTone.current = twoToneMaterials;
+    swept.current = sweptMeshes;
     tint.current = tinted;
+    tintLit.current = tintLitMaterials;
 
     propRoots.current = {};
     propScale.current = {};
@@ -485,9 +607,11 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
       rig.current = null;
       tinted?.dispose();
       tint.current = null;
+      tintLit.current = [];
       for (const flat of flats.values()) flat.dispose();
       for (const mat of twoToneMaterials) mat.dispose();
       twoTone.current = [];
+      swept.current = [];
       headBones.current = [];
       hands.current = [];
       vHands.current = [];
@@ -512,6 +636,7 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     if (!emissive) return;
 
     tint.current?.color.set(emissive);
+    for (const material of tintLit.current) material.color.set(emissive);
 
     rig.current?.setInk(emissive);
   }, [scene, emissive]);
@@ -530,7 +655,11 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
       userData.uniforms.uSplit.value = shadeSplit;
       userData.uniforms.uShadeDir.value.copy(_shadeDir);
     }
-  }, [scene, shadeColor, shadeSplit, shadeAngle, shadeHeight]);
+    for (const { uniforms } of swept.current) {
+      uniforms.uRound.value = shadeRound;
+      uniforms.uSweep.value = shadeSweep;
+    }
+  }, [scene, shadeColor, shadeSplit, shadeAngle, shadeHeight, shadeRound, shadeSweep]);
 
   useFrame((_, dt) => {
     const tracked = headBones.current;
@@ -590,6 +719,19 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
           bone.quaternion.premultiply(_delta);
         }
       }
+    }
+
+    /*
+     * Re-centre each swept node on the pose about to be drawn. After the mixer
+     * and after the head track, and per frame rather than fitted once, because
+     * she moves — a centre that stayed put would let the plane slide across her
+     * as she did.
+     */
+    for (const { mesh, uniforms } of swept.current) {
+      const span = poseSpan(mesh, uniforms.uShadeDir.value, _shadeCentre);
+      if (span <= 0) continue;
+      uniforms.uOrigin.value.copy(_shadeCentre);
+      uniforms.uSpan.value = span;
     }
 
     const pop = popping.current;

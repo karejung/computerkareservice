@@ -90,6 +90,15 @@ const MAGNET = 6;
 /** Pointer travel, in px, under which a press counts as a tap and not a drag. */
 const CLICK_SLOP = 5;
 /*
+ * How long a finger has to stay down for the press to count as a click.
+ * A touch screen has one gesture where a mouse has two, so the two are spread
+ * over time instead: tap does what hover does, press-and-hold does what click
+ * does. 450ms is about where a hold stops reading as a slow tap.
+ */
+const LONG_PRESS = 450;
+/** Gap between a tapped sticker and the label naming it, in px. */
+const HINT_GAP = 10;
+/*
  * The label is the cursor while it is up, so it centres on the pointer rather
  * than hanging off it — which also means there is nothing to flip or clamp at
  * the edges of the window.
@@ -326,6 +335,13 @@ export function Stickers({
   /** The hovered sticker's label, or null. Only set when it actually changes. */
   const [hint, setHint] = useState<string | null>(null);
   const hintNode = useRef<HTMLDivElement>(null);
+  /*
+   * Which sticker a *tap* named, or null when the label is following a mouse.
+   * A mouse label is placed on every pointermove and centres on the cursor; a
+   * tapped one has no cursor to centre on and a finger sitting on top of it,
+   * so it is placed once, off the sticker's own box.
+   */
+  const hintFor = useRef<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -458,6 +474,29 @@ export function Stickers({
       ?.setAttribute('values', sheenMatrix(0, 0));
   };
 
+  /*
+   * Lean a sticker toward a point on screen and slide its light away from it.
+   * False when the point is outside the sticker, which is also the signal to
+   * let it back to rest.
+   *
+   * Deliberately measured off the *drawn* box. getBoundingClientRect includes
+   * the magnet's own offset, so the pull shrinks as it lands and the two settle
+   * a few pixels in — a lean toward the pointer rather than a lunge at it.
+   */
+  const leanToward = (node: HTMLElement, x: number, y: number) => {
+    const box = node.getBoundingClientRect();
+    const nx = (x - (box.left + box.width / 2)) / (box.width / 2);
+    const ny = (y - (box.top + box.height / 2)) / (box.height / 2);
+
+    if (Math.abs(nx) > 1 || Math.abs(ny) > 1) {
+      rest(node);
+      return false;
+    }
+    node.classList.add('is-tilting');
+    tilt(node, clamp(-ny * MAX_TILT_ANGLE), clamp(nx * MAX_TILT_ANGLE), { x: nx, y: ny });
+    return true;
+  };
+
   useEffect(() => {
     const move = (e: PointerEvent) => {
       if (e.pointerType !== 'mouse') return;
@@ -474,24 +513,12 @@ export function Stickers({
          * `holding` it saw on mount.
          */
         if (node.classList.contains('is-away')) continue;
-        /*
-         * Deliberately measured off the *drawn* box. getBoundingClientRect
-         * includes the magnet's own offset, so the pull shrinks as it lands and
-         * the two settle a few pixels in — a lean toward the cursor rather than
-         * a lunge at it.
-         */
-        const box = node.getBoundingClientRect();
-        const nx = (e.clientX - (box.left + box.width / 2)) / (box.width / 2);
-        const ny = (e.clientY - (box.top + box.height / 2)) / (box.height / 2);
-
-        if (Math.abs(nx) > 1 || Math.abs(ny) > 1) {
-          rest(node);
-          continue;
-        }
-        node.classList.add('is-tilting');
-        tilt(node, clamp(-ny * MAX_TILT_ANGLE), clamp(nx * MAX_TILT_ANGLE), { x: nx, y: ny });
+        if (!leanToward(node, e.clientX, e.clientY)) continue;
         if (over === null) over = sticker.label ?? null;
       }
+
+      // A mouse has taken the label over; it is no longer a tapped one.
+      hintFor.current = null;
 
       setHint((was) => (was === over ? was : over));
       /*
@@ -519,7 +546,12 @@ export function Stickers({
       if (!base) base = { beta: e.beta, gamma: e.gamma };
       const rx = clamp((e.beta - base.beta) * GYRO_GAIN);
       const ry = clamp((e.gamma - base.gamma) * GYRO_GAIN);
-      for (const node of nodes.current.values()) {
+      for (const [id, node] of nodes.current) {
+        /*
+         * A tapped sticker is leaning toward the finger and a swept one is on
+         * its way off screen; the gyro drives everything else.
+         */
+        if (id === hintFor.current || node.classList.contains('is-away')) continue;
         node.classList.add('is-tilting');
         tilt(node, rx, ry);
       }
@@ -529,33 +561,86 @@ export function Stickers({
      * iOS hands out orientation only after an explicit grant, and only from a
      * gesture — so ask on the first touch and never again either way.
      */
+    if (typeof DeviceOrientationEvent === 'undefined') return;
+
     const permission = (
       DeviceOrientationEvent as unknown as {
         requestPermission?: () => Promise<PermissionState>;
       }
     ).requestPermission;
 
-    const start = () => window.addEventListener('deviceorientation', turn);
+    /*
+     * Two names for the same reading. Chrome on Android fires the plain one;
+     * some builds only ever fire the absolute one, and a browser that sends
+     * both just overwrites the same four properties twice.
+     */
+    const start = () => {
+      window.addEventListener('deviceorientation', turn);
+      window.addEventListener('deviceorientationabsolute', turn as EventListener);
+    };
+    const stop = () => {
+      window.removeEventListener('deviceorientation', turn);
+      window.removeEventListener('deviceorientationabsolute', turn as EventListener);
+    };
 
     if (typeof permission !== 'function') {
       start();
-      return () => window.removeEventListener('deviceorientation', turn);
+      return stop;
     }
 
     const ask = () => {
       window.removeEventListener('touchend', ask);
+      window.removeEventListener('pointerup', ask);
       permission()
         .then((state) => {
           if (state === 'granted') start();
         })
         .catch(() => {});
     };
+    // Either gesture will do; whichever lands first takes the other one down.
     window.addEventListener('touchend', ask, { once: true });
+    window.addEventListener('pointerup', ask, { once: true });
 
     return () => {
       window.removeEventListener('touchend', ask);
-      window.removeEventListener('deviceorientation', turn);
+      window.removeEventListener('pointerup', ask);
+      stop();
     };
+  }, []);
+
+  /*
+   * A tapped label is placed once, against the sticker rather than the finger —
+   * centred on it would be under the hand that asked for it. Above by default,
+   * below when there is no room, and re-run on every change because the chip is
+   * only in the DOM while there is something to say.
+   */
+  useEffect(() => {
+    const chip = hintNode.current;
+    const node = hintFor.current ? nodes.current.get(hintFor.current) : null;
+    if (!chip || !node) return;
+
+    const box = node.getBoundingClientRect();
+    const { width, height } = chip.getBoundingClientRect();
+    const above = box.top - HINT_GAP - height;
+    const top = above < HINT_GAP ? box.bottom + HINT_GAP : above;
+    chip.style.transform = `translate3d(${box.left + box.width / 2 - width / 2}px, ${top}px, 0)`;
+  }, [hint]);
+
+  /*
+   * A tap elsewhere puts the label away — on a mouse that is what leaving the
+   * sticker does, and a finger has no leaving.
+   */
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' || !hintFor.current) return;
+      const node = nodes.current.get(hintFor.current);
+      if (node && e.target instanceof Node && node.contains(e.target)) return;
+      if (node) rest(node);
+      hintFor.current = null;
+      setHint(null);
+    };
+    window.addEventListener('pointerdown', away);
+    return () => window.removeEventListener('pointerdown', away);
   }, []);
 
   /*
@@ -606,10 +691,58 @@ export function Stickers({
     const from = { ...at };
     let travelled = 0;
 
+    /*
+     * Touch gets both desktop gestures out of one finger. A tap stands in for
+     * hover — the same lean, the same light, the same label — and only a press
+     * held past LONG_PRESS stands in for a click.
+     *
+     * The timer only arms it; the act itself waits for the release, because
+     * window.open outside a user gesture is what a phone browser blocks. So
+     * the hold says "this has taken" and lifting is what spends it.
+     */
+    const touch = e.pointerType !== 'mouse';
+    let armed = false;
+    let arming = 0;
+
+    if (touch) {
+      for (const [id, other] of nodes.current) {
+        if (id !== sticker.id) rest(other);
+      }
+      hintFor.current = sticker.id;
+      leanToward(node, e.clientX, e.clientY);
+      setHint(sticker.label ?? null);
+
+      arming = window.setTimeout(() => {
+        armed = true;
+        arming = 0;
+        node.classList.add('is-armed');
+        navigator.vibrate?.(8);
+      }, LONG_PRESS);
+    }
+
+    const disarm = () => {
+      if (arming) window.clearTimeout(arming);
+      arming = 0;
+      armed = false;
+      node.classList.remove('is-armed');
+    };
+
     const drag = (move: PointerEvent) => {
       const next = placed.current.get(sticker.id);
       if (!next) return;
       travelled = Math.max(travelled, Math.hypot(move.clientX - startX, move.clientY - startY));
+      /*
+       * Once it is being dragged it is not being read: the hold stops counting
+       * toward a click and the label goes, the same way a mouse label goes when
+       * the cursor leaves.
+       */
+      if (touch && travelled >= CLICK_SLOP) {
+        disarm();
+        if (hintFor.current === sticker.id) {
+          hintFor.current = null;
+          setHint(null);
+        }
+      }
       const field = layer.current;
       const w = field?.clientWidth || window.innerWidth;
       const h = field?.clientHeight || window.innerHeight;
@@ -626,9 +759,13 @@ export function Stickers({
        * would fire whatever it does.
        */
       const tapped = end.type === 'pointerup' && travelled < CLICK_SLOP;
-      if (tapped && sticker.action === 'vsign') onVsign?.();
+      // On touch the tap has already been spent on the hover, so only a press
+      // that armed goes on to act.
+      const acts = tapped && (!touch || armed);
+      disarm();
+      if (acts && sticker.action === 'vsign') onVsign?.();
       // noopener so the new tab cannot reach back through window.opener.
-      if (tapped && sticker.href) window.open(sticker.href, '_blank', 'noopener');
+      if (acts && sticker.href) window.open(sticker.href, '_blank', 'noopener');
       node.removeEventListener('pointermove', drag);
       node.removeEventListener('pointerup', drop);
       node.removeEventListener('pointercancel', drop);
