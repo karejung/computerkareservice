@@ -5,9 +5,41 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { STAR_PINK, starSprite } from '@/lib/star';
 import { SquircleCard } from './SquircleCard';
 
-const COUNT = 5;
 const RATIO = 0.38;
 const OUTER = 0.84;
+
+/*
+ * One ring, ten stars, nose to tail: the ring turns and they chase it round.
+ *
+ * The step is the whole circle divided by the count, so the ring is always
+ * closed — the ten of them ring the circle at every instant rather than
+ * bunching into an arc with a gap behind it.
+ */
+const COUNT = 10;
+const STEP = 360 / COUNT;
+
+/** How small the back of the tail gets, against 1 at the head. */
+const TAIL_END = 0.44;
+
+/*
+ * Seconds of the twinkle, matching `--tw` in globals.css. Held here as well
+ * because the per-star offset is a share of it, and a share needs the number.
+ */
+const TWINKLE = 1.25;
+
+/*
+ * The ring is one tail, not ten stars in a circle: size and fade both grade
+ * along it, from a big solid head down to a small star that has faded to
+ * nothing, so it reads as a trail off a wand that happens to close on itself.
+ *
+ * Both grades run up to the last seat, because the ring turns toward increasing
+ * angle and that one leads. Something has to: an evenly graded circle of
+ * identical stars turning is rotationally symmetric, and looks still however
+ * fast it spins.
+ */
+function shareAt(index: number): number {
+  return COUNT < 2 ? 1 : index / (COUNT - 1);
+}
 
 /*
  * SVG stand-in so the stars are there on first paint, before the particle
@@ -69,7 +101,18 @@ export function Loader({
       <SquircleCard id="loader-squircle" className="loader__card">
         <div className="loader__orbit">
           {Array.from({ length: COUNT }, (_, i) => (
-            <span key={i} className="loader__seat" style={{ '--i': i } as CSSProperties}>
+            <span
+              key={i}
+              className="loader__seat"
+              style={
+                {
+                  '--a': `${i * STEP}deg`,
+                  '--tail': TAIL_END + (1 - TAIL_END) * shareAt(i),
+                  '--fade': shareAt(i),
+                  '--tw-delay': `${(-(i / COUNT) * TWINKLE).toFixed(3)}s`,
+                } as CSSProperties
+              }
+            >
               <PinkStar src={sprite} />
             </span>
           ))}

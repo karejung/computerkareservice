@@ -199,80 +199,99 @@ html {
 }
 
 /*
- * The whole ring turns; the five stars are pinned to it in a short arc, so what
- * travels is one line of stars nose to tail rather than five separate blinks.
- * `--step` is the gap between them: a full 72deg would close the arc into an
- * even ring, and this much less than that is what reads as a tail.
+ * The ring the chase runs on. Radius and star size are fractions of `--box`, so
+ * the whole thing scales as one and there is a single place to size it; the
+ * radius plus half a star is how far the outside of a star reaches, and that
+ * has to stay inside the box's own half.
+ *
+ * The turn lives here: the ring sweeps and the stars ride it round.
  */
 .loader__orbit {
-  --step: 48deg;
+  --box: min(84vmin, 660px);
+  --radius: calc(var(--box) * 0.36);
+  --star: calc(var(--box) * 0.2);
+  --dur: 2.6s;
+  /* One twinkle is shorter than one turn, so the sparkle laps the ring. */
+  --tw: 1.25s;
 
   position: relative;
-  width: min(32vmin, 180px);
-  height: min(32vmin, 180px);
-  animation: loader-orbit 1.5s linear infinite;
+  width: var(--box);
+  height: var(--box);
+  animation: loader-orbit var(--dur) linear infinite;
+}
+
+/*
+ * Back to one even sweep. Stepping the ring seat by seat gave it a ratchet, and
+ * a trail off a wand does not tick — it draws. The magic is put in by the
+ * twinkle below instead, which is a thing happening on the stars rather than to
+ * the whole ring.
+ */
+@keyframes loader-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * The sparkle. Written on `scale` and `opacity` — the individual transform
+ * property, not the `transform` shorthand — so it composes with the star's
+ * counter-rotation instead of fighting it for the same declaration.
+ *
+ * The stagger is what makes it read as one light running along the tail rather
+ * than ten stars breathing at once: each star is a step further through the
+ * same twinkle than the one behind it.
+ */
+@keyframes loader-twinkle {
+  0%,
+  100% {
+    scale: 0.78;
+    opacity: 0.7;
+  }
+  50% {
+    scale: 1.18;
+    opacity: 1;
+  }
 }
 
 /*
  * Two rotations either side of the offset: the first walks the seat round the
  * ring, the second takes that angle back off the star, so it rides the circle
- * without leaning into it. The graded scale is the tail thinning out behind the
- * head — the ring turns toward the last seat, so that one is the head and the
- * grade runs up to it. The seat can carry it because its own transform never
+ * without leaning into it. The graded scale and fade are the tail thinning out
+ * behind the head, which the seat can carry because its own transform never
  * animates.
  */
 .loader__seat {
-  --i: 0;
+  --a: 0deg;
   --tail: 1;
+  --fade: 1;
 
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 26%;
-  height: 26%;
+  width: var(--star);
+  height: var(--star);
   translate: -50% -50%;
-  transform: rotate(calc(var(--i) * var(--step))) translateY(-132%)
-    rotate(calc(var(--i) * var(--step) * -1)) scale(var(--tail));
-  opacity: var(--tail);
-}
-
-.loader__seat:nth-child(1) {
-  --tail: 0.34;
-}
-
-.loader__seat:nth-child(2) {
-  --tail: 0.5;
-}
-
-.loader__seat:nth-child(3) {
-  --tail: 0.66;
-}
-
-.loader__seat:nth-child(4) {
-  --tail: 0.82;
-}
-
-.loader__seat:nth-child(5) {
-  --tail: 1;
+  transform: rotate(var(--a)) translateY(calc(var(--radius) * -1))
+    rotate(calc(var(--a) * -1)) scale(var(--tail));
+  opacity: var(--fade);
 }
 
 /*
- * Undoing the ring's own turn, at its rate: without this a star drawn on a
- * spinning parent spins with it, which is the in-place twirl the stars are
- * meant not to have.
+ * Two animations on one element: the first undoes the ring's turn, so a star
+ * riding a spinning parent does not spin with it, and the second is the
+ * twinkle. Only the twinkle takes the per-star delay, which is why the delays
+ * are listed to match — a delay on the counter-rotation would put it out of
+ * phase with the ring and leave the star at a permanent lean.
  */
 .loader__star-art {
   display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
-  animation: loader-orbit 1.5s linear infinite reverse;
-}
-
-@keyframes loader-orbit {
-  to {
-    transform: rotate(360deg);
-  }
+  animation:
+    loader-orbit var(--dur) linear infinite reverse,
+    loader-twinkle var(--tw) ease-in-out infinite;
+  animation-delay: 0s, var(--tw-delay, 0s);
 }
 
 @media (prefers-reduced-motion: reduce) {
