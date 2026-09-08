@@ -89,11 +89,14 @@ const STICKERS: Sticker[] = [
     id: 'mail',
     file: 'button-2.svg',
     /*
-     * Same 64px disc as button-1, sitting in a 72px frame that holds the drop
-     * shadow. Span is scaled so the disc matches rather than the box.
+     * The same box as the other two buttons, because the file is: all three are
+     * 64x71 around a 64px disc. This one was declared square and a span 72/64
+     * larger, to correct for a 72px frame it does not have — which left the art
+     * letterboxed in a box wider than itself, and everything measured off that
+     * box (the glare's gradient, both blurs) sized to the wrong circle.
      */
-    span: 0.075 * (72 / 64),
-    ratio: 1,
+    span: 0.075,
+    ratio: 64 / 71,
     label: 'kareservic3@gmail.com',
     href: 'mailto:kareservic3@gmail.com',
     stay: true,
@@ -202,20 +205,6 @@ const GYRO_GAIN = 0.6;
 const GYRO_SPAN = MAX_TILT_ANGLE / GYRO_GAIN;
 /** How far a sticker leans toward the cursor, as a share of its own width. */
 const MAGNET = 6;
-/*
- * How far off the middle of the layer the gyro's attention travels at full
- * tilt, as a share of the layer's half-size.
- *
- * A gyro reading is one angle for the whole board, so feeding it to every
- * sticker as its own tilt turned the lot of them the same way at the same time
- * — a board being rotated rather than a board being leaned over. So the tilt
- * places a point instead, and each sticker leans toward *that*: they gather
- * inward, hard at the edges and barely at all in the middle, and the point they
- * gather on drifts the way the hand does. Under 1 so the point stays on the
- * board rather than swinging off its edge, where everything would end up
- * leaning the same way again.
- */
-const GYRO_FOCUS = 0.6;
 /** Pointer travel, in px, under which a press counts as a tap and not a drag. */
 const CLICK_SLOP = 5;
 /*
@@ -746,23 +735,6 @@ export function Stickers({
     return () => window.removeEventListener('pointermove', move);
   }, []);
 
-  /*
-   * Lean every sticker toward a point, by how far it sits from that point
-   * across the *layer* rather than across itself. leanToward normalises against
-   * the sticker's own box, which is what a pointer wants — only the one it is
-   * over should answer it. A gyro is the whole board's input, so the whole
-   * board answers, and the strength is the tilt's own magnitude.
-   */
-  const leanTogether = (node: HTMLElement, x: number, y: number, frame: DOMRect, by: number) => {
-    const box = node.getBoundingClientRect();
-    const reach = (v: number) => Math.max(-1, Math.min(1, v));
-    const nx = reach((x - (box.left + box.width / 2)) / (frame.width / 2)) * by;
-    const ny = reach((y - (box.top + box.height / 2)) / (frame.height / 2)) * by;
-
-    node.classList.add('is-tilting');
-    tilt(node, clamp(-ny * MAX_TILT_ANGLE), clamp(nx * MAX_TILT_ANGLE), { x: nx, y: ny });
-  };
-
   useEffect(() => {
     let base: { beta: number; gamma: number } | null = null;
 
@@ -799,31 +771,14 @@ export function Stickers({
 
       const rx = clamp(db * GYRO_GAIN);
       const ry = clamp(dg * GYRO_GAIN);
-
-      const field = layer.current;
-      if (!field) return;
-      const frame = field.getBoundingClientRect();
-
-      /*
-       * The angles become a place to look, not an angle to hold. Its offset is
-       * signed the way the old tilt was — a sticker sitting dead centre gets
-       * the same lean and the same light it used to, and everything else gets
-       * that plus a lean inward.
-       *
-       * Strength is the tilt's magnitude, so a phone held level leaves the
-       * board flat instead of permanently gathered on its own middle.
-       */
-      const by = Math.min(1, Math.hypot(rx, ry) / MAX_TILT_ANGLE);
-      const fx = frame.left + frame.width * (0.5 + (ry / MAX_TILT_ANGLE) * GYRO_FOCUS * 0.5);
-      const fy = frame.top + frame.height * (0.5 - (rx / MAX_TILT_ANGLE) * GYRO_FOCUS * 0.5);
-
       for (const [id, node] of nodes.current) {
         /*
          * A tapped sticker is leaning toward the finger and a swept one is on
          * its way off screen; the gyro drives everything else.
          */
         if (id === hintFor.current || node.classList.contains('is-away')) continue;
-        leanTogether(node, fx, fy, frame, by);
+        node.classList.add('is-tilting');
+        tilt(node, rx, ry);
       }
     };
 
@@ -849,11 +804,19 @@ export function Stickers({
       );
     }
 
-    const permission = (
-      DeviceOrientationEvent as unknown as {
-        requestPermission?: () => Promise<PermissionState>;
-      }
-    ).requestPermission;
+    /*
+     * Feature-detected off the constructor, but *called* on it. Safari's
+     * requestPermission is a static method that checks its receiver, and the
+     * bare reference this used to keep and invoke as `permission()` arrives
+     * with `this` undefined — which throws a TypeError that the catch below
+     * then swallowed, so iOS asked for nothing, granted nothing, and reported
+     * nothing. Every other branch worked, which is why this looked like a
+     * missing sensor rather than a missing receiver.
+     */
+    const gate = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<PermissionState>;
+    };
+    const permission = gate.requestPermission;
 
     /*
      * Two names for the same reading. Chrome on Android fires the plain one;
@@ -877,11 +840,17 @@ export function Stickers({
     const ask = () => {
       window.removeEventListener('touchend', ask);
       window.removeEventListener('pointerup', ask);
-      permission()
+      gate
+        .requestPermission!()
         .then((state) => {
           if (state === 'granted') start();
+          else console.warn(`[stickers] no gyro tilt: orientation ${state}.`);
         })
-        .catch(() => {});
+        .catch((err) => {
+          // Left visible on purpose. A rejection here is the whole feature
+          // failing, and it is the one thing a phone gives no other sign of.
+          console.warn('[stickers] no gyro tilt: permission call failed.', err);
+        });
     };
     // Either gesture will do; whichever lands first takes the other one down.
     window.addEventListener('touchend', ask, { once: true });
