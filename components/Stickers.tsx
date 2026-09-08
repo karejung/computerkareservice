@@ -253,6 +253,17 @@ function restingTilt() {
 const MAX_TILT_ANGLE = 15;
 /** Degrees of hand movement to reach full tilt. */
 const GYRO_GAIN = 0.6;
+/*
+ * How much of each new orientation reading to believe, 0..1.
+ *
+ * A phone lying still still reports a degree or two of wander, and the light
+ * disc is placed off those angles by LIGHT_SWING, so the raw signal put the
+ * highlight in a slightly different place every single frame — which on a
+ * layer whose brightness *is* its position reads as a flicker rather than as
+ * movement. A one-pole low pass over the reading costs about six frames of lag
+ * and takes the jitter down to roughly a third.
+ */
+const GYRO_EASE = 0.15;
 /** The same thing the other way round: hand degrees that reach the clamp. */
 const GYRO_SPAN = MAX_TILT_ANGLE / GYRO_GAIN;
 /** How far a sticker leans toward the cursor, as a share of its own width. */
@@ -326,6 +337,30 @@ const LIGHT_EDGE = 12;
 
 /** Keeps the highlight's centre on the artwork rather than off its corner. */
 const onSticker = (v: number) => Math.min(100 - LIGHT_EDGE, Math.max(LIGHT_EDGE, v));
+
+/*
+ * Poses are quantised before they are written, and a node that already wears
+ * the pose is not written to at all.
+ *
+ * Both matter more here than they would on a plain transform. The holo's mask
+ * is a *generated image* — `radial-gradient(circle at var(--gx) var(--gy))` is
+ * a different image at every position, so it is re-synthesised from scratch on
+ * every write — and there is a full-size blur over it, and a blend under it.
+ * So a write that moves the light by a twentieth of a pixel costs the same
+ * repaint as one that moves it across the sticker, and the pointer path was
+ * paying it for all eleven stickers on every mousemove: the ten the cursor is
+ * nowhere near were being sent their unchanged resting pose, feColorMatrix
+ * rewrite and all, at the mouse's polling rate.
+ */
+const ANGLE_STEP = 0.1;
+const PULL_STEP = 0.002;
+/* Rounded twice: to the step, then off the float dust the step leaves — these
+ * land in inline styles, and `-4.800000000000001deg` is nobody's friend. */
+const quantise = (v: number, step: number) =>
+  Math.round(Math.round(v / step) * step * 1000) / 1000;
+/** The pose each node was last written, so an identical one can be skipped. */
+const poses = new WeakMap<HTMLElement, string>();
+const REST_POSE = 'rest';
 
 /*
  * The rake of the resting light, in screen terms: up and to the right, the same
@@ -779,12 +814,18 @@ export function Stickers({
    * transform.
    */
   const tilt = (node: HTMLElement, rx: number, ry: number, pull?: { x: number; y: number }) => {
-    node.style.setProperty('--rx', `${rx}deg`);
-    node.style.setProperty('--ry', `${ry}deg`);
-    // Only the pointer has somewhere to be pulled toward; a gyro reading does
-    // not, so the sticker stays put and only tilts.
-    node.style.setProperty('--mx', pull ? `${pull.x * MAGNET}%` : '0%');
-    node.style.setProperty('--my', pull ? `${pull.y * MAGNET}%` : '0%');
+    /*
+     * Quantised up front rather than at each write, so that everything below —
+     * the angles, the magnet, the light and both feColorMatrix rows — is a
+     * function of the same rounded pair and the pose either differs from the
+     * one already on the node or is skipped whole. A tenth of a degree and a
+     * five-hundredth of a half-width are both well under a pixel at the size
+     * these are drawn.
+     */
+    const qx = quantise(rx, ANGLE_STEP);
+    const qy = quantise(ry, ANGLE_STEP);
+    const px = pull ? quantise(pull.x, PULL_STEP) : 0;
+    const py = pull ? quantise(pull.y, PULL_STEP) : 0;
 
     /*
      * Centre of the highlight, -1..1 across the sticker. The reference slides a
@@ -794,20 +835,32 @@ export function Stickers({
      */
     // Negated: this is a reflection, so it slides away from whatever is tipping
     // the sticker rather than pooling under it.
-    const lx = pull ? -pull.x : -ry / MAX_TILT_ANGLE;
-    const ly = pull ? -pull.y : rx / MAX_TILT_ANGLE;
+    const lx = pull ? -px : -qy / MAX_TILT_ANGLE;
+    const ly = pull ? -py : qx / MAX_TILT_ANGLE;
+
+    const shade = shadeMatrix(lx, ly);
+    const sheen = sheenMatrix(lx, ly);
+    const pose = `${qx} ${qy} ${px} ${py} ${pull ? 1 : 0} ${shade}`;
+    if (poses.get(node) === pose) return;
+    poses.set(node, pose);
+
+    node.style.setProperty('--rx', `${qx}deg`);
+    node.style.setProperty('--ry', `${qy}deg`);
+    // Only the pointer has somewhere to be pulled toward; a gyro reading does
+    // not, so the sticker stays put and only tilts.
+    node.style.setProperty('--mx', pull ? `${px * MAGNET}%` : '0%');
+    node.style.setProperty('--my', pull ? `${py * MAGNET}%` : '0%');
     node.style.setProperty('--gx', `${onSticker(LIGHT_REST.x + lx * LIGHT_SWING)}%`);
     node.style.setProperty('--gy', `${onSticker(LIGHT_REST.y + ly * LIGHT_SWING)}%`);
 
-    node
-      .querySelector('.sticker__lit--shade feColorMatrix')
-      ?.setAttribute('values', shadeMatrix(lx, ly));
-    node
-      .querySelector('.sticker__lit--sheen feColorMatrix')
-      ?.setAttribute('values', sheenMatrix(lx, ly));
+    node.querySelector('.sticker__lit--shade feColorMatrix')?.setAttribute('values', shade);
+    node.querySelector('.sticker__lit--sheen feColorMatrix')?.setAttribute('values', sheen);
   };
 
   const rest = (node: HTMLElement) => {
+    if (poses.get(node) === REST_POSE) return;
+    poses.set(node, REST_POSE);
+
     node.classList.remove('is-tilting');
     node.style.removeProperty('--rx');
     node.style.removeProperty('--ry');
@@ -833,8 +886,8 @@ export function Stickers({
    * the magnet's own offset, so the pull shrinks as it lands and the two settle
    * a few pixels in — a lean toward the pointer rather than a lunge at it.
    */
-  const leanToward = (node: HTMLElement, x: number, y: number) => {
-    const box = node.getBoundingClientRect();
+  const leanToward = (node: HTMLElement, x: number, y: number, measured?: DOMRect) => {
+    const box = measured ?? node.getBoundingClientRect();
     const nx = (x - (box.left + box.width / 2)) / (box.width / 2);
     const ny = (y - (box.top + box.height / 2)) / (box.height / 2);
 
@@ -848,22 +901,40 @@ export function Stickers({
   };
 
   useEffect(() => {
-    const move = (e: PointerEvent) => {
-      if (e.pointerType !== 'mouse') return;
-      let over: string | null = null;
+    let at: { x: number; y: number } | null = null;
+    let frame = 0;
 
+    const place = () => {
+      frame = 0;
+      const cursor = at;
+      if (!cursor) return;
+
+      /*
+       * Every measurement first, every write after.
+       *
+       * These used to be interleaved — measure a sticker, pose it, measure the
+       * next — and a pose write dirties the layout that the next measurement
+       * then has to rebuild before it can answer. Eleven stickers carrying
+       * masks, blurs and blend modes meant eleven forced synchronous layouts
+       * per mousemove. Split in two, it is one.
+       *
+       * A swept sticker is out of play: no label, no tilt, no magnet. Read off
+       * the class rather than recomputed, because this listener is registered
+       * once and would otherwise be holding the `swept` and `holding` it saw
+       * on mount.
+       */
+      const measured: Array<{ sticker: Sticker; node: HTMLElement; box: DOMRect }> = [];
       for (const sticker of STICKERS) {
         const node = nodes.current.get(sticker.id);
-        if (!node) continue;
+        if (!node || inFlight(node)) continue;
+        measured.push({ sticker, node, box: node.getBoundingClientRect() });
+      }
+      const chip = hintNode.current;
+      const chipBox = chip?.getBoundingClientRect();
 
-        /*
-         * A swept sticker is out of play: no label, no tilt, no magnet. Read
-         * off the class rather than recomputed, because this listener is
-         * registered once and would otherwise be holding the `swept` and
-         * `holding` it saw on mount.
-         */
-        if (inFlight(node)) continue;
-        if (!leanToward(node, e.clientX, e.clientY)) continue;
+      let over: string | null = null;
+      for (const { sticker, node, box } of measured) {
+        if (!leanToward(node, cursor.x, cursor.y, box)) continue;
         if (over === null && sticker.label) over = sticker.id;
       }
 
@@ -876,20 +947,57 @@ export function Stickers({
        * follows every pointermove and React has nothing to reconcile — the
        * element is already there, only its offset changes.
        */
-      const chip = hintNode.current;
-      if (chip) {
-        const { width, height } = chip.getBoundingClientRect();
-        chip.style.transform = `translate3d(${e.clientX - width / 2}px, ${
-          e.clientY - height / 2
+      if (chip && chipBox) {
+        chip.style.transform = `translate3d(${cursor.x - chipBox.width / 2}px, ${
+          cursor.y - chipBox.height / 2
         }px, 0)`;
       }
     };
+
+    /*
+     * The event only records where the cursor is; the frame does the work. A
+     * mouse reports faster than the screen redraws — often twice per frame, and
+     * a trackpad more than that — and every one of those reports was repainting
+     * the holo's generated mask and the blur over it. Coalescing to one pose
+     * per frame throws away nothing anyone could have seen.
+     */
+    const move = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse') return;
+      at = { x: e.clientX, y: e.clientY };
+      if (!frame) frame = requestAnimationFrame(place);
+    };
     window.addEventListener('pointermove', move);
-    return () => window.removeEventListener('pointermove', move);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, []);
 
   useEffect(() => {
     let base: { beta: number; gamma: number } | null = null;
+    let eased: { beta: number; gamma: number } | null = null;
+    let angles: { rx: number; ry: number } | null = null;
+    let frame = 0;
+
+    /*
+     * One pose per frame for the whole board. Orientation arrives on its own
+     * clock and does not wait for the screen — a reading that lands twice
+     * between two paints used to repaint every sticker twice, and the second
+     * one was never shown.
+     */
+    const pose = () => {
+      frame = 0;
+      if (!angles) return;
+      for (const [id, node] of nodes.current) {
+        /*
+         * A tapped sticker is leaning toward the finger and a swept one is on
+         * its way off screen; the gyro drives everything else.
+         */
+        if (id === hintFor.current || inFlight(node)) continue;
+        node.classList.add('is-tilting');
+        tilt(node, angles.rx, angles.ry);
+      }
+    };
 
     /*
      * Shortest way round. beta wraps at ±180, so a phone held near the seam
@@ -904,10 +1012,22 @@ export function Stickers({
 
     const turn = (e: DeviceOrientationEvent) => {
       if (e.beta === null || e.gamma === null) return;
-      if (!base) base = { beta: e.beta, gamma: e.gamma };
 
-      const db = swing(e.beta, base.beta);
-      const dg = swing(e.gamma, base.gamma);
+      /*
+       * The reading, eased rather than taken. Through `swing` for the same
+       * reason the baseline is: an average that runs the long way round the
+       * ±180 seam would crawl across the whole range instead of settling.
+       */
+      if (!eased) eased = { beta: e.beta, gamma: e.gamma };
+      else {
+        eased.beta += swing(e.beta, eased.beta) * GYRO_EASE;
+        eased.gamma += swing(e.gamma, eased.gamma) * GYRO_EASE;
+      }
+
+      if (!base) base = { beta: eased.beta, gamma: eased.gamma };
+
+      const db = swing(eased.beta, base.beta);
+      const dg = swing(eased.gamma, base.gamma);
 
       /*
        * The baseline is dragged along by however far the reading has gone past
@@ -922,17 +1042,8 @@ export function Stickers({
       base.beta += db - Math.min(GYRO_SPAN, Math.max(-GYRO_SPAN, db));
       base.gamma += dg - Math.min(GYRO_SPAN, Math.max(-GYRO_SPAN, dg));
 
-      const rx = clamp(db * GYRO_GAIN);
-      const ry = clamp(dg * GYRO_GAIN);
-      for (const [id, node] of nodes.current) {
-        /*
-         * A tapped sticker is leaning toward the finger and a swept one is on
-         * its way off screen; the gyro drives everything else.
-         */
-        if (id === hintFor.current || inFlight(node)) continue;
-        node.classList.add('is-tilting');
-        tilt(node, rx, ry);
-      }
+      angles = { rx: clamp(db * GYRO_GAIN), ry: clamp(dg * GYRO_GAIN) };
+      if (!frame) frame = requestAnimationFrame(pose);
     };
 
     /*
@@ -941,7 +1052,11 @@ export function Stickers({
      * reader's first tap lands, and this layer does not exist yet at that
      * point: Scene holds it back until the model is live.
      */
-    return onGyro(turn);
+    const off = onGyro(turn);
+    return () => {
+      off();
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, []);
 
   /*

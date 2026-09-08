@@ -620,7 +620,16 @@ html {
   pointer-events: none;
 }
 
-/* The plain sheen over the top, as a disc and kept faint. */
+/*
+ * The plain sheen over the top, as a disc and kept faint.
+ *
+ * No blur, unlike the holo. The holo's is doing something — it rounds the
+ * kinks where one hue in the rainbow hands over to the next — but a radial
+ * gradient is already smooth, so blurring this one was a full-size raster pass
+ * per sticker per frame in exchange for nothing anyone could see. It also
+ * cannot have been softening the die-cut edge: filters run before masks, which
+ * is why the holo's comment says the silhouette stays as crisp as the artwork.
+ */
 .sticker__glare {
   -webkit-mask-image: var(--art);
   -webkit-mask-size: contain;
@@ -636,7 +645,6 @@ html {
     rgba(255, 255, 255, calc(var(--glare) * 0.36)) 34%,
     rgba(255, 255, 255, 0) 66%
   );
-  filter: blur(calc(var(--size) * 0.034));
   pointer-events: none;
 }
 
