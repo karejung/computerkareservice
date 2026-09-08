@@ -32,6 +32,17 @@ const THUMBS: Record<PropKind, string> = {
 };
 
 /*
+ * What the tile is showing, spelled out above it. Named rather than derived
+ * from the file names below, which are what the thumbnails happen to be called
+ * and not what the things are.
+ */
+const NAMES: Record<PropKind, string> = {
+  ds: 'Nintendo DS',
+  pc: 'Laptop',
+  phone: 'Phone',
+};
+
+/*
  * The prop picker: two arrows at the edges of the frame, and a tile in the
  * corner showing what they landed on. The carousel that used to sit between
  * them is gone — the arrows step the selection directly, and the tile is a
@@ -91,6 +102,14 @@ export const Inventory = forwardRef<InventoryHandle, InventoryProps>(function In
 
   const held = SLOTS[index];
 
+  /*
+   * The last thing she actually held. The label fades rather than cutting, and
+   * clearing the text the moment her hands empty would blank it mid-fade — so
+   * the name outlives the holding by exactly one transition.
+   */
+  const name = useRef('');
+  if (held !== 'unknown') name.current = NAMES[held];
+
   return (
     <>
       <aside className={`inventory${dimmed ? ' is-dim' : ''}`} aria-label="Held item">
@@ -108,6 +127,10 @@ export const Inventory = forwardRef<InventoryHandle, InventoryProps>(function In
         <svg className="inventory__frame" viewBox="0 0 128 128" preserveAspectRatio="none">
           <path d={SQUIRCLE} />
         </svg>
+
+        <p className={`inventory__name${held === 'unknown' ? '' : ' is-on'}`}>
+          {name.current}
+        </p>
 
         <div className="inventory__item">
           {held === 'unknown' ? (

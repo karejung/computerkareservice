@@ -337,12 +337,30 @@ html {
  */
 .stickers {
   /*
-   * Spans are a fraction of vmin, and on a phone vmin is the short side — so
-   * the same fraction that reads well on a desktop comes out as a thumbnail
-   * there. Scaled up under the breakpoint rather than re-authored per sticker,
-   * to keep their relative sizes.
+   * The length the spans are a fraction of.
+   *
+   * Driven by the window's *width*, not vmin. Spans used to be a fraction of
+   * vmin with a 1.75 multiplier under the phone breakpoint, which had two
+   * faults. On a landscape desktop vmin is the height, so narrowing the window
+   * horizontally did nothing to the stickers until the width fell past the
+   * height — they simply crowded together and then jumped a size at 700px. And
+   * the multiplier made the phone the reference the desktop was cut down from,
+   * so the desktop board read as thumbnails of the one that works on a phone.
+   *
+   * Now it is one continuous ramp with the phone at its narrow end. Below the
+   * breakpoint the base is 175vw, which is exactly what 1.75 * 100vmin came to
+   * on a portrait phone — the size that reads well there is unchanged. Above
+   * it the base keeps climbing with the width, just slower than 1:1, so a
+   * desktop sticker is a good deal bigger than it was without becoming the
+   * banner-across-the-screen that full proportionality would give: 1022px +
+   * 29.1vw passes through 1225px at 700px wide, meeting the phone's value at
+   * the breakpoint so nothing jumps, and reaches 1441px at 1440px wide.
+   *
+   * Two ceilings. 1800px stops a very wide monitor from growing them forever,
+   * and 190vh stands in for the old vmin: a short window has to keep them off
+   * each other's backs, and width alone cannot see that.
    */
-  --sticker-scale: 1;
+  --sticker-base: min(calc(1022px + 29.1vw), 1800px, 190vh);
 
   /*
    * canvas < stickers < controls, ordered inside .scene-root. All three are
@@ -358,7 +376,7 @@ html {
 
 @media (max-width: 700px) {
   .stickers {
-    --sticker-scale: 1.75;
+    --sticker-base: min(175vw, 190vh);
   }
 }
 
@@ -385,12 +403,13 @@ html {
   --gy: 16%;
   /*
    * The drawn width, named so the holo and the glare can blur in proportion to
-   * it. Blurring by --sticker-scale instead had it backwards: the scale is 1.75
-   * on a phone, but 100vmin is the short side there, so the stickers come out
-   * *smaller* in pixels than on a desktop and were getting twice the blur —
-   * which spread the sheen so thin it read as no light at all.
+   * it. Blurring by the old --sticker-scale instead had it backwards: it read
+   * 1.75 on a phone, where the stickers come out *smaller* in pixels than on a
+   * desktop, so they were getting twice the blur — which spread the sheen so
+   * thin it read as no light at all. --size is the pixels themselves, so it
+   * cannot get that wrong.
    */
-  --size: calc(var(--span) * var(--sticker-scale) * 100vmin);
+  --size: calc(var(--span) * var(--sticker-base));
   --holo: 0.55;
   --glare: 0.22;
 
@@ -720,6 +739,15 @@ body:has(.hint) .custom-cursor {
   height: auto;
   opacity: 0.43;
   transform: translateY(-12%) scaleX(var(--flip));
+  /*
+   * The empty-hands mark's glow, in the same radii — measured off --ui rather
+   * than the button, so the two read as the same light when they show at once.
+   * The arrow sits at 0.43 on an orb of nearly its own value, and the halo is
+   * what lifts it off.
+   */
+  filter:
+    drop-shadow(0 0 calc(var(--ui) * 0.015) rgba(255, 255, 255, 0.95))
+    drop-shadow(0 0 calc(var(--ui) * 0.05) rgba(255, 255, 255, 0.6));
   pointer-events: none;
   user-select: none;
 }
@@ -764,6 +792,60 @@ body:has(.hint) .custom-cursor {
   user-select: none;
   -webkit-user-select: none;
   pointer-events: none;
+}
+
+/*
+ * The name of whatever is in the tile, written inside it along the bottom.
+ * Mono, because the tile is a readout and this is the same readout in words.
+ *
+ * It sits inside the tile and *behind* the thumbnail, which is why it can be
+ * type on a bed rather than type over artwork: the item passes in front of it
+ * and the name reads out from underneath. The white outline is what holds it
+ * against the checkers it is written on, and against the thumbnail's own edge
+ * where the two meet. Eight offsets rather than -webkit-text-stroke, which
+ * strokes the glyph's centre line and eats into letters this small.
+ *
+ * No z-index, deliberately: .inventory__item carries 1, so leaving this at auto
+ * is what puts the png in front.
+ */
+.inventory__name {
+  position: absolute;
+  right: 0;
+  bottom: calc(var(--cell) * 0.07);
+  left: 0;
+  margin: 0;
+  /*
+   * The sticker label's type, to the letter — the two are the same thing said
+   * in two places, so they read as one voice: mono, bold, the tile outline's
+   * grey. Capped at the label's own 14px and floored at 9, since the tile
+   * scales from 168px down to 40 and a fixed size fits neither end.
+   */
+  font:
+    700 clamp(9px, calc(var(--cell) * 0.09), 14px) / 1 var(--font-mono);
+  letter-spacing: -0.01em;
+  text-align: center;
+  color: var(--outline);
+  --edge: max(1px, calc(var(--cell) * 0.012));
+  text-shadow:
+    var(--edge) 0 0 #fff,
+    calc(var(--edge) * -1) 0 0 #fff,
+    0 var(--edge) 0 #fff,
+    0 calc(var(--edge) * -1) 0 #fff,
+    var(--edge) var(--edge) 0 #fff,
+    var(--edge) calc(var(--edge) * -1) 0 #fff,
+    calc(var(--edge) * -1) var(--edge) 0 #fff,
+    calc(var(--edge) * -1) calc(var(--edge) * -1) 0 #fff;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(calc(var(--cell) * 0.07));
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.inventory__name.is-on {
+  opacity: 1;
+  transform: none;
 }
 
 /*
@@ -870,8 +952,9 @@ body:has(.hint) .custom-cursor {
 
 /*
  * The empty-hands mark: the question mark's colour and glow, on the tool shape.
- * Still, rather than floating like a thumbnail, so it reads as a placeholder
- * and not as something being carried.
+ * Still, rather than floating like a thumbnail, so it reads as a placeholder and
+ * not as something being carried. The arrows carry the same glow — it belongs to
+ * both marks rather than to either one of them.
  */
 .inventory__empty {
   position: absolute;

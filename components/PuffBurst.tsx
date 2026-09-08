@@ -15,6 +15,14 @@ const ALPHA_STEPS = 5;
 const FILL = '#ffffff';
 const SHADE = '#eeeeee';
 
+/*
+ * The smaller cloud a swap gets. Losing a prop is the end of something and
+ * carries the full burst; trading one for the next is a beat inside the spin,
+ * and a full burst there reads as the same event happening twice. Fewer puffs
+ * and no stars keeps it a wipe rather than a send-off.
+ */
+const SWAP_COUNT = 8;
+
 const STAR_COUNT = 9;
 const STAR_COLOR = '#ea35d7';
 const STAR_SPREAD = 0.9;
@@ -191,8 +199,14 @@ function celAlpha(u: number) {
   return Math.ceil(Math.max(0, raw) * ALPHA_STEPS) / ALPHA_STEPS;
 }
 
+/*
+ * What the burst is covering: a prop leaving her hands for good, or one being
+ * traded for the next. The caller says which; the sizes are this file's to set.
+ */
+export type PuffKind = 'dismiss' | 'swap';
+
 export type PuffBurstHandle = {
-  burst: (at: THREE.Vector3, radius?: number, stars?: boolean) => void;
+  burst: (at: THREE.Vector3, radius?: number, kind?: PuffKind) => void;
   sparkle: (at: THREE.Vector3) => void;
 };
 
@@ -205,7 +219,7 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
   ref,
 ) {
   const group = useRef<THREE.Group>(null);
-  const clock = useRef({ time: 0, live: false, smoke: true, stars: true, reach: 1 });
+  const clock = useRef({ time: 0, live: false, smoke: true, stars: true, reach: 1, count: COUNT });
   const origin = useRef(new THREE.Vector3());
   const texture = useMemo(makePuffTexture, []);
 
@@ -336,21 +350,35 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
     [geometry, material, texture, starGeometry, starMaterial],
   );
 
-  const fire = (at: THREE.Vector3, smoke: boolean, stars: boolean, reach: number) => {
+  const fire = (
+    at: THREE.Vector3,
+    smoke: boolean,
+    stars: boolean,
+    reach: number,
+    count: number,
+  ) => {
     origin.current.copy(at);
     clock.current.time = 0;
     clock.current.live = true;
     clock.current.smoke = smoke;
     clock.current.stars = stars;
     clock.current.reach = reach;
+    clock.current.count = count;
   };
 
   useImperativeHandle(ref, () => ({
-    burst(at: THREE.Vector3, radius?: number, stars = true) {
-      fire(at, true, stars, radius === undefined ? 1 : Math.max(0.15, radius / SPREAD));
+    burst(at: THREE.Vector3, radius?: number, kind: PuffKind = 'dismiss') {
+      const full = kind === 'dismiss';
+      fire(
+        at,
+        true,
+        full,
+        radius === undefined ? 1 : Math.max(0.15, radius / SPREAD),
+        full ? COUNT : SWAP_COUNT,
+      );
     },
     sparkle(at: THREE.Vector3) {
-      fire(at, false, true, SPARKLE_REACH);
+      fire(at, false, true, SPARKLE_REACH, COUNT);
     },
   }));
 
@@ -378,7 +406,7 @@ export const PuffBurst = forwardRef<PuffBurstHandle, PuffBurstProps>(function Pu
     for (let i = 0; i < COUNT; i++) {
       const p = puffs[i];
       const u = (t - p.delay) / (1 - p.delay);
-      if (!c.smoke || u <= 0 || u >= 1) {
+      if (!c.smoke || i >= c.count || u <= 0 || u >= 1) {
         alpha.setX(i, 0);
         // Zero the size too, so a sparkle — which runs stars without smoke —
         // does not spend a live burst rasterising 20 stale full-size quads.

@@ -5,6 +5,8 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 
+import type { PuffKind } from './PuffBurst';
+
 import { asset } from '@/lib/asset';
 import { createFaceRig, type FaceRig } from '@/lib/faceTexture';
 import {
@@ -97,6 +99,12 @@ const FACE_MATERIAL = key('face.002');
 const LIT_MATERIALS = new Set([LIT_MATERIAL, FACE_MATERIAL]);
 
 const DS_POP = 0.26;
+/*
+ * How long a prop takes to arrive when there is no clip under it — the blend
+ * into her holding pose plus the pop itself. Only the star spiral needs the
+ * number, to know how long it has to cover.
+ */
+const BARE_ARRIVAL = FADE + DS_POP;
 const PUFF_COVER = 1.5;
 const REVEAL_DELAY = FADE;
 
@@ -184,7 +192,7 @@ export type KareProps = {
   headPitch?: number;
   onModeChange?: (mode: KareMode) => void;
   onSpin?: (seconds: number) => void;
-  onPuff?: (at: THREE.Vector3, radius?: number, stars?: boolean) => void;
+  onPuff?: (at: THREE.Vector3, radius?: number, kind?: PuffKind) => void;
   onSparkle?: (at: THREE.Vector3) => void;
 };
 
@@ -251,7 +259,12 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     next.reset().setEffectiveWeight(1).fadeIn(seconds).play();
   };
 
-  const puffAt = (kind: PropKind | null, stars: boolean) => {
+  /*
+   * A burst between her hands, sized to cover the prop it is swallowing. Only
+   * ever fired for a prop on its way out; `how` says whether that is for good
+   * or only until the next one lands, and PuffBurst sizes the cloud from it.
+   */
+  const puffAt = (kind: PropKind | null, how: PuffKind) => {
     if (hands.current.length !== 2) return;
     hands.current[0].getWorldPosition(_handL);
     hands.current[1].getWorldPosition(_handR);
@@ -259,7 +272,7 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
     onPuffRef.current?.(
       _between.addVectors(_handL, _handR).multiplyScalar(0.5),
       radius === undefined ? undefined : radius * PUFF_COVER,
-      stars,
+      how,
     );
   };
 
@@ -292,25 +305,58 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
 
   const setMode = (next: KareMode): boolean => {
     if (next === mode.current) return false;
+    const leaving = mode.current === 'idle' ? null : (mode.current as PropKind);
+
+    /*
+     * Empty-handed. The poof is a trick played on the thing already there, and
+     * with nothing there it is a flourish over an empty pair of hands — which
+     * is what the first pick-up of the session looked like. So the prop simply
+     * arrives: blend into the holding pose, pop it in, and let the star spiral
+     * be the whole of the event. `next` cannot be idle here, because reaching
+     * this line means she was already idle and the two differ.
+     */
+    if (!leaving) {
+      const arriving = next as PropKind;
+      if (pending.current || !propRoots.current[arriving]) return false;
+      reveal.current = null;
+      fadeTo(mode.current, arriving, FADE);
+      mode.current = arriving;
+      notify.current?.(arriving);
+      showProp(arriving);
+      popping.current = arriving;
+      dsPop.current = 0;
+      onSpinRef.current?.(BARE_ARRIVAL);
+      return true;
+    }
+
     const toIdle = next === 'idle';
-    const seconds = toIdle
-      ? oneShot('poof', 'idle', FADE_TIGHT)
-      : oneShot('spin', next, FADE_TIGHT);
+    /*
+     * One clip both ways. Swapping props used to spin her and putting one down
+     * used to poof, which made the two halves of the same trick read as two
+     * different tricks — and the spin is the longer, showier of the two for the
+     * half whose job is to clear the old prop away.
+     */
+    const seconds = oneShot('poof', next, FADE_TIGHT);
 
     if (!seconds) return false;
 
-    const leaving = mode.current === 'idle' ? null : (mode.current as PropKind);
     showProp(null);
     popping.current = null;
     dsPop.current = -1;
 
     reveal.current = null;
 
-    if (toIdle) {
-      puffAt(leaving, true);
-    } else {
-      onSpinRef.current?.(seconds);
-    }
+    /*
+     * The puff belongs to whatever is *leaving* her hands, never to what is
+     * arriving. A prop vanishing needs covering; a prop arriving is the reveal
+     * the clip has been building toward, and a burst on top of it hides the one
+     * moment worth watching. So it fires at the top of the clip, over the prop
+     * this transition is clearing — the only reason there is a clip at all.
+     */
+    puffAt(leaving, toIdle ? 'dismiss' : 'swap');
+    // The star spiral, still only for a prop arriving — named for the clip it
+    // used to accompany rather than for the one playing under it now.
+    if (!toIdle) onSpinRef.current?.(seconds);
     wink(seconds);
     return true;
   };
@@ -586,7 +632,13 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
       const from: ClipKey =
         e.action === a.spin ? 'spin' : e.action === a.poof ? 'poof' : 'vsign';
 
-      fadeTo(from, after, from === 'vsign' ? FADE : from === 'spin' ? FADE : FADE_TIGHT);
+      /*
+       * Read off the destination rather than the clip. Both directions play the
+       * poof now, so the clip no longer distinguishes settling into a prop pose
+       * — which wants the longer blend the spin used to get — from dropping
+       * back to idle.
+       */
+      fadeTo(from, after, from === 'vsign' || after !== 'idle' ? FADE : FADE_TIGHT);
       pending.current = null;
       if (after !== 'idle' && propRoots.current[after]) {
         reveal.current = { kind: after, at: performance.now() + REVEAL_DELAY * 1000 };
@@ -759,7 +811,6 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
       showProp(due.kind);
       popping.current = due.kind;
       dsPop.current = 0;
-      puffAt(due.kind, false);
     }
 
     tickScreens(dt);

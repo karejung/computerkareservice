@@ -114,6 +114,14 @@ const BODY_DIR = new THREE.Vector3(-0.45, 0.12, 1).normalize();
 const FACE_FILL = 2.6;
 const FACE_DROP = 0.3;
 
+/*
+ * Degrees of drift per second, near enough: drei's autoRotateSpeed is scaled so
+ * 2.0 is a lap every 30 seconds, and this is a lap every three or four minutes.
+ * Slow enough that the model reads as standing still and being looked around,
+ * rather than as being turned on a plinth.
+ */
+const AUTO_SPIN = 0.3;
+
 const MIN_POLAR = 0.2;
 const MAX_POLAR = Math.PI / 2 - 0.02;
 
@@ -649,7 +657,7 @@ export default function Scene({
                 headPitch={LOOK.headPitch}
                 onModeChange={setMode}
                 onSpin={(seconds) => stars.current?.burst(seconds)}
-                onPuff={(at, radius, stars) => puff.current?.burst(at, radius, stars)}
+                onPuff={(at, radius, kind) => puff.current?.burst(at, radius, kind)}
                 onSparkle={(at) => puff.current?.sparkle(at)}
               />
               <StarSpiral ref={stars} />
@@ -673,6 +681,16 @@ export default function Scene({
             enablePan={false}
             minPolarAngle={MIN_POLAR}
             maxPolarAngle={MAX_POLAR}
+            /*
+             * Held until the model is framed and dropped again for the face
+             * zoom. GroundAndFit is placing the camera on those first frames
+             * and would be drifting against it, and the zoom is a deliberate
+             * framing that a drift only walks away from. CameraFocus needs no
+             * such guard — it turns the controls off for the whole flight, and
+             * drei only updates them while they are on.
+             */
+            autoRotate={live && !faceZoom}
+            autoRotateSpeed={AUTO_SPIN}
           />
           <GroundAndFit
             group={model}

@@ -22,8 +22,8 @@ type Sticker = {
   id: string;
   file: string;
   /*
-   * Long side, as a fraction of the smaller viewport axis — deliberately not
-   * tied to the SVG's own dimensions, so a sticker's size on screen is a
+   * Long side, as a fraction of --sticker-base in globals.css — deliberately
+   * not tied to the SVG's own dimensions, so a sticker's size on screen is a
    * layout decision rather than whatever Figma last exported at. The catch is
    * that rescaling the artwork in Figma then has no effect until this moves
    * with it: sticker-2 went from a 739px export to a 944px one and needed the
@@ -59,7 +59,13 @@ const STICKERS: Sticker[] = [
   {
     id: 'six',
     file: 'sticker-6.svg',
-    span: 0.2,
+    /*
+     * Smaller than the flat 0.2 the other artwork stickers sit at. It is the
+     * only square one, so the same span buys it far more area than a banner of
+     * that width — at 0.2 it read as the biggest thing on the board once the
+     * width ramp grew everything.
+     */
+    span: 0.16,
     ratio: 1,
     normal: 'ds-normal.svg',
     project: 'ds',
@@ -93,6 +99,16 @@ const STICKERS: Sticker[] = [
 
 /** Keep the scatter off the edges so nothing lands half out of the window. */
 const MARGIN = 0.12;
+/*
+ * The same thing at the top, and much smaller, because the top is measured
+ * differently: this one is the gap left above a sticker's own edge rather than
+ * above its centre, so a banner and a button both come as close to the browser's
+ * top as each other. At the blanket 0.12 the tall stickers were held a tenth of
+ * the window below the ones they were meant to be scattered among, and the
+ * whole board sat low. Her head is still kept clear by the zones below, which
+ * is a column, not a band across the window.
+ */
+const MARGIN_TOP = 0.02;
 
 /*
  * The column the avatar stands in, in fractions of the sticker layer.
@@ -121,11 +137,20 @@ const FACE_WEIGHT = 12;
  */
 const PEER_WEIGHT = 6;
 /*
- * Breathing room demanded around a sticker already placed, in fractions of the
- * layer. Counted as part of its box, so a draw that merely touches is charged
- * for it and the search prefers a real gap to a shave.
+ * How much of its own box a sticker may share with the ones already down before
+ * it is charged anything for it.
+ *
+ * There was a gap demanded here instead, and between that and the search
+ * keeping the single least-overlapping draw of 240, the board came out with
+ * every sticker in its own clearing — tidy, and duller than a board anyone has
+ * actually stuck stickers on. A real one has corners riding over each other.
+ *
+ * So a bite this size is free and only what is past it costs. It doubles as the
+ * search's stopping condition, since a cost of zero ends the loop: the first
+ * draw that overlaps no more than this is taken, rather than the whole 240
+ * being spent grinding toward the emptiest spot on the layer.
  */
-const PEER_GAP = 0.015;
+const PEER_FREE = 0.22;
 /*
  * Draws per sticker. Higher than it was, because avoiding the others as well as
  * her is a much narrower target than avoiding her alone — the free ground is
@@ -174,6 +199,20 @@ const GYRO_GAIN = 0.6;
 const GYRO_SPAN = MAX_TILT_ANGLE / GYRO_GAIN;
 /** How far a sticker leans toward the cursor, as a share of its own width. */
 const MAGNET = 6;
+/*
+ * How far off the middle of the layer the gyro's attention travels at full
+ * tilt, as a share of the layer's half-size.
+ *
+ * A gyro reading is one angle for the whole board, so feeding it to every
+ * sticker as its own tilt turned the lot of them the same way at the same time
+ * — a board being rotated rather than a board being leaned over. So the tilt
+ * places a point instead, and each sticker leans toward *that*: they gather
+ * inward, hard at the edges and barely at all in the middle, and the point they
+ * gather on drifts the way the hand does. Under 1 so the point stays on the
+ * board rather than swinging off its edge, where everything would end up
+ * leaning the same way again.
+ */
+const GYRO_FOCUS = 0.6;
 /** Pointer travel, in px, under which a press counts as a tap and not a drag. */
 const CLICK_SLOP = 5;
 /*
@@ -183,8 +222,6 @@ const CLICK_SLOP = 5;
  * does. 450ms is about where a hold stops reading as a slow tap.
  */
 const LONG_PRESS = 450;
-/** Gap between a tapped sticker and the label naming it, in px. */
-const HINT_GAP = 10;
 /*
  * The label is the cursor while it is up, so it centres on the pointer rather
  * than hanging off it — which also means there is nothing to flip or clamp at
@@ -489,12 +526,12 @@ export function Stickers({
     const field = layer.current;
     const w = field?.clientWidth || window.innerWidth;
     const h = field?.clientHeight || window.innerHeight;
-    const spot = () => MARGIN + Math.random() * (1 - MARGIN * 2);
+    const spot = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
 
     /*
-     * Measured rather than derived: --size is a fraction of the viewport's vmin
-     * and the layer is the stage inset from it, with a scale that changes at the
-     * phone breakpoint on top. The rendered box already knows all of that. Read
+     * Measured rather than derived: --size is a fraction of --sticker-base,
+     * which ramps with the window's width, and the layer is the stage inset
+     * from that window. The rendered box already knows all of it. Read
      * before write(), so no rotation is in it yet — a resting tilt grows the box
      * by a few percent, which is inside the slack the zones are padded with.
      */
@@ -518,11 +555,19 @@ export function Stickers({
       return B.halfW * B.halfH - A.halfW * A.halfH;
     });
 
-    /* The boxes already spoken for, padded by PEER_GAP, as zones to avoid. */
+    /* The boxes already spoken for, as zones to charge for sharing. */
     const taken: Zone[] = [];
 
     for (const sticker of order) {
       const { halfW, halfH } = half.get(sticker.id)!;
+
+      /*
+       * How high this one may ride, as its own half-height clear of the top.
+       * Clamped to the middle so a sticker taller than the band it is allowed
+       * cannot invert the range and sample outside it.
+       */
+      const ceiling = Math.min(0.5, MARGIN_TOP + halfH);
+      const floor = Math.max(0.5, 1 - MARGIN - halfH);
 
       /*
        * Bounded, and it keeps the least bad draw rather than the last one: a
@@ -534,13 +579,20 @@ export function Stickers({
       let best = { x: 0.5, y: 0.5 };
       let cost = Infinity;
       for (let i = 0; i < PLACEMENT_TRIES && cost > 0; i++) {
-        const x = spot();
-        const y = spot();
+        const x = spot(MARGIN, 1 - MARGIN);
+        const y = spot(ceiling, floor);
         let c =
           overlap(KEEP_CLEAR, x, y, halfW, halfH) +
           FACE_WEIGHT * overlap(FACE_CLEAR, x, y, halfW, halfH);
-        // A sticker already down is just another zone to keep clear of.
-        for (const zone of taken) c += PEER_WEIGHT * overlap(zone, x, y, halfW, halfH);
+        /*
+         * A sticker already down is another zone to share with, and sharing is
+         * only charged past PEER_FREE. Summed over all of them first, so the
+         * allowance is what this sticker may give away in total rather than a
+         * fresh one against each neighbour.
+         */
+        let shared = 0;
+        for (const zone of taken) shared += overlap(zone, x, y, halfW, halfH);
+        c += PEER_WEIGHT * Math.max(0, shared - PEER_FREE * 4 * halfW * halfH);
         if (c < cost) {
           cost = c;
           best = { x, y };
@@ -548,10 +600,10 @@ export function Stickers({
       }
 
       taken.push({
-        left: best.x - halfW - PEER_GAP,
-        right: best.x + halfW + PEER_GAP,
-        top: best.y - halfH - PEER_GAP,
-        bottom: best.y + halfH + PEER_GAP,
+        left: best.x - halfW,
+        right: best.x + halfW,
+        top: best.y - halfH,
+        bottom: best.y + halfH,
       });
 
       placed.current.set(sticker.id, {
@@ -691,6 +743,23 @@ export function Stickers({
     return () => window.removeEventListener('pointermove', move);
   }, []);
 
+  /*
+   * Lean every sticker toward a point, by how far it sits from that point
+   * across the *layer* rather than across itself. leanToward normalises against
+   * the sticker's own box, which is what a pointer wants — only the one it is
+   * over should answer it. A gyro is the whole board's input, so the whole
+   * board answers, and the strength is the tilt's own magnitude.
+   */
+  const leanTogether = (node: HTMLElement, x: number, y: number, frame: DOMRect, by: number) => {
+    const box = node.getBoundingClientRect();
+    const reach = (v: number) => Math.max(-1, Math.min(1, v));
+    const nx = reach((x - (box.left + box.width / 2)) / (frame.width / 2)) * by;
+    const ny = reach((y - (box.top + box.height / 2)) / (frame.height / 2)) * by;
+
+    node.classList.add('is-tilting');
+    tilt(node, clamp(-ny * MAX_TILT_ANGLE), clamp(nx * MAX_TILT_ANGLE), { x: nx, y: ny });
+  };
+
   useEffect(() => {
     let base: { beta: number; gamma: number } | null = null;
 
@@ -727,14 +796,31 @@ export function Stickers({
 
       const rx = clamp(db * GYRO_GAIN);
       const ry = clamp(dg * GYRO_GAIN);
+
+      const field = layer.current;
+      if (!field) return;
+      const frame = field.getBoundingClientRect();
+
+      /*
+       * The angles become a place to look, not an angle to hold. Its offset is
+       * signed the way the old tilt was — a sticker sitting dead centre gets
+       * the same lean and the same light it used to, and everything else gets
+       * that plus a lean inward.
+       *
+       * Strength is the tilt's magnitude, so a phone held level leaves the
+       * board flat instead of permanently gathered on its own middle.
+       */
+      const by = Math.min(1, Math.hypot(rx, ry) / MAX_TILT_ANGLE);
+      const fx = frame.left + frame.width * (0.5 + (ry / MAX_TILT_ANGLE) * GYRO_FOCUS * 0.5);
+      const fy = frame.top + frame.height * (0.5 - (rx / MAX_TILT_ANGLE) * GYRO_FOCUS * 0.5);
+
       for (const [id, node] of nodes.current) {
         /*
          * A tapped sticker is leaning toward the finger and a swept one is on
          * its way off screen; the gyro drives everything else.
          */
         if (id === hintFor.current || node.classList.contains('is-away')) continue;
-        node.classList.add('is-tilting');
-        tilt(node, rx, ry);
+        leanTogether(node, fx, fy, frame, by);
       }
     };
 
@@ -743,6 +829,22 @@ export function Stickers({
      * gesture — so ask on the first touch and never again either way.
      */
     if (typeof DeviceOrientationEvent === 'undefined') return;
+
+    /*
+     * Orientation is gated on a secure context in every current browser: Chrome
+     * drops the event without a word on an insecure origin, and iOS rejects the
+     * permission call. `http://localhost` counts as secure and the LAN address
+     * the dev server also prints does not — which is the address a phone has to
+     * use, so the tilt is dead on a phone for a reason that has nothing to do
+     * with the phone. Worth a line in the console, since neither browser gives
+     * one.
+     */
+    if (!window.isSecureContext) {
+      console.warn(
+        '[stickers] no gyro tilt: device orientation needs https (or localhost). ' +
+          `this page is ${window.location.origin}.`,
+      );
+    }
 
     const permission = (
       DeviceOrientationEvent as unknown as {
@@ -790,10 +892,15 @@ export function Stickers({
   }, []);
 
   /*
-   * A tapped label is placed once, against the sticker rather than the finger —
-   * centred on it would be under the hand that asked for it. Above by default,
-   * below when there is no room, and re-run on every change because the chip is
-   * only in the DOM while there is something to say.
+   * A tapped label is placed once, on the sticker's own centre — the same place
+   * a mouse one sits, which is under the cursor. It hung above the sticker at
+   * first, to stay out from under the finger that asked for it, and that put it
+   * somewhere no label ever appears on a desktop and left it drifting off the
+   * top of the board for anything near the edge. A finger covers part of a
+   * sticker, not the middle of the air above it.
+   *
+   * Re-run on every change, because the chip is only in the DOM while there is
+   * something to say.
    */
   useEffect(() => {
     const chip = hintNode.current;
@@ -802,9 +909,9 @@ export function Stickers({
 
     const box = node.getBoundingClientRect();
     const { width, height } = chip.getBoundingClientRect();
-    const above = box.top - HINT_GAP - height;
-    const top = above < HINT_GAP ? box.bottom + HINT_GAP : above;
-    chip.style.transform = `translate3d(${box.left + box.width / 2 - width / 2}px, ${top}px, 0)`;
+    chip.style.transform = `translate3d(${box.left + box.width / 2 - width / 2}px, ${
+      box.top + box.height / 2 - height / 2
+    }px, 0)`;
   }, [hint]);
 
   /*
