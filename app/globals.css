@@ -462,6 +462,17 @@ html {
   transition: transform 900ms cubic-bezier(0.22, 1.32, 0.36, 1) var(--sweep-delay, 0ms);
 }
 
+/*
+ * On its way home, in the same stagger and a shorter, plainer curve — coming
+ * back is the board being handed over, not thrown. Worn for exactly the length
+ * of the trip: components/Stickers takes it off on a timer (RETURN_MS), and
+ * both the pointer and the gyro leave a sticker wearing it alone, so nothing
+ * stamps `is-tilting` on it and drops the transition halfway across.
+ */
+.sticker.is-settling {
+  transition: transform 650ms cubic-bezier(0.22, 1, 0.36, 1) var(--sweep-delay, 0ms);
+}
+
 .sticker.is-tilting {
   transition: filter 160ms ease;
 }

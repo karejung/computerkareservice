@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { asset } from '@/lib/asset';
@@ -48,6 +48,14 @@ type Sticker = {
   href?: string;
   /** Stays put when the face zoom sweeps the rest off. */
   stay?: boolean;
+  /** Its artwork keeps moving after it is drawn; see ClockFace. */
+  clock?: boolean;
+  /*
+   * Lands straight instead of taking a resting tilt. For anything that is read
+   * rather than looked at: a clock thrown down at 20 degrees still tells the
+   * time, but you have to work out which way is twelve before you can read it.
+   */
+  upright?: boolean;
 };
 
 const STICKERS: Sticker[] = [
@@ -74,6 +82,22 @@ const STICKERS: Sticker[] = [
     project: 'ds',
     label: 'Aero Aquarium',
     href: 'https://aeroaquarium.vercel.app/',
+  },
+  /*
+   * The clock. Its file is the four pieces off the design — the pale dial, the
+   * two white bars, the pink star — composed into one 418 square, because a
+   * sticker is one file and the pieces are only ever drawn together. The bars
+   * are laid out with the centre of their bottom cap on the dial's centre, so a
+   * plain rotate about (209, 209) swings them the way a hand swings.
+   */
+  {
+    id: 'clock',
+    file: 'clock.svg',
+    span: 0.15,
+    ratio: 1,
+    clock: true,
+    upright: true,
+    label: 'Seoul (GMT+9)',
   },
   { id: 'vsign', file: 'button.svg', span: 0.075, ratio: 64 / 71, action: 'vsign' },
   {
@@ -102,6 +126,33 @@ const STICKERS: Sticker[] = [
     stay: true,
   },
 ];
+
+/*
+ * The clock reads Seoul, wherever it is being read from — this is a shop in
+ * Seoul, and the time on its wall is the shop's time, not the visitor's.
+ *
+ * Built once: constructing a formatter per tick is the expensive half of asking
+ * what time it is.
+ */
+const SEOUL = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Seoul',
+  hourCycle: 'h23',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+/** Degrees per hour, per minute and per second on a round face. */
+const PER_HOUR = 30;
+const PER_MINUTE = 6;
+const PER_SECOND = 6;
+
+/*
+ * Where the hands pivot, in the file's own units: the centre of a 418 dial.
+ * Written into a rotate() rather than set as a transform-origin, because the
+ * markup is injected into a document whose stylesheet knows nothing about it.
+ */
+const PIVOT = 209;
 
 /** Keep the scatter off the edges so nothing lands half out of the window. */
 const MARGIN = 0.12;
@@ -227,6 +278,27 @@ const LONG_PRESS = 450;
 const SWEEP_EDGE = 0;
 
 /*
+ * The way back, in ms, and the stagger it shares with the way out.
+ *
+ * The return has to be marked as its own state rather than left to the base
+ * transition, because of who else writes to `transform`. A gyro drives every
+ * sticker on every reading and stamps `is-tilting` on each one, which drops the
+ * transform transition so a lean lands the instant the hand moves — right for a
+ * lean, fatal for anything else mid-flight. The trip *out* was already immune:
+ * both the pointer and the gyro skip anything wearing `is-away`. Coming back,
+ * that class is gone on the first frame, so on a phone the next reading — under
+ * 16ms later — killed the transition and the stickers arrived home instantly.
+ * So a returning sticker keeps a class of its own, and both of them skip that
+ * too until it has landed.
+ */
+const RETURN_MS = 650;
+const SWEEP_STAGGER = 55;
+
+/** Out of play for the pointer and the gyro alike: in flight, either way. */
+const inFlight = (node: HTMLElement) =>
+  node.classList.contains('is-away') || node.classList.contains('is-settling');
+
+/*
  * Where the highlight sits when nothing is tipping the sticker, and how far it
  * travels from there, both in percent of the sticker's box.
  *
@@ -335,12 +407,13 @@ const HINT_RADIUS = 9999;
  * box that would come out with a different radius on each axis.
  */
 function StickerHint({
-  label,
+  sticker,
   hostRef,
 }: {
-  label: string;
+  sticker: Sticker;
   hostRef: React.RefObject<HTMLDivElement | null>;
 }) {
+  const label = sticker.label ?? '';
   const host = hostRef;
 
   useEffect(() => {
@@ -389,7 +462,12 @@ function StickerHint({
         />
       </svg>
       <span className="hint__text">{label}</span>
-      <img className="hint__arrow" src={asset('/image/arrow.svg')} alt="" draggable={false} />
+      {/* The arrow is a promise that something opens. A label that only names
+          what it is on — the clock saying which city it keeps — makes no such
+          promise, so it goes without. */}
+      {sticker.href && (
+        <img className="hint__arrow" src={asset('/image/arrow.svg')} alt="" draggable={false} />
+      )}
     </div>
   );
 }
@@ -441,6 +519,59 @@ function NormalLight({
   );
 }
 
+/*
+ * The clock's face: the one sticker whose artwork keeps changing after it has
+ * been drawn.
+ *
+ * It owns the element it writes into rather than being driven from the shared
+ * node map. Through the map, finding the hands depends on two unrelated things
+ * — the ref callback and the fetch that supplies the markup — having landed in
+ * the right order, and on nothing rewriting the markup afterwards. Here the
+ * host is this component's own ref and the hands are looked up per tick, so
+ * there is no order to get wrong and nothing to go stale.
+ *
+ * Ticks are scheduled to the next whole second off the wall clock rather than
+ * on a flat 1000ms interval: a backgrounded tab wakes with its timers coalesced
+ * and would otherwise drift out of step with the seconds it is displaying.
+ *
+ * The hour and minute hands carry the fraction below them, so the hour hand
+ * sits a third of the way past 4 at twenty past rather than jumping an hour at
+ * a time.
+ */
+function ClockFace({ art }: { art: { __html: string } | undefined }) {
+  const host = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el || !art) return;
+
+    let timer = 0;
+    const tick = () => {
+      const parts = SEOUL.formatToParts(new Date());
+      const at = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+      const s = at('second');
+      const m = at('minute');
+      const h = at('hour') % 12;
+
+      const turn = (name: string, deg: number) =>
+        el
+          .querySelector(`[data-hand="${name}"]`)
+          ?.setAttribute('transform', `rotate(${deg.toFixed(3)} ${PIVOT} ${PIVOT})`);
+
+      turn('hour', (h + m / 60) * PER_HOUR);
+      turn('minute', (m + s / 60) * PER_MINUTE);
+      turn('second', s * PER_SECOND);
+
+      timer = window.setTimeout(tick, 1000 - (Date.now() % 1000));
+    };
+
+    tick();
+    return () => window.clearTimeout(timer);
+  }, [art]);
+
+  return <div className="sticker__art" ref={host} dangerouslySetInnerHTML={art} />;
+}
+
 export function Stickers({
   onVsign,
   swept = false,
@@ -465,7 +596,11 @@ export function Stickers({
    * silhouette has no filter on it.
    */
   const [markup, setMarkup] = useState<Record<string, string>>({});
-  /** The hovered sticker's label, or null. Only set when it actually changes. */
+  /*
+   * The id of the sticker the label is for, or null — the id rather than the
+   * label itself, because the chip needs to know more about it than what it
+   * says: whether it links anywhere, which is what earns the arrow.
+   */
   const [hint, setHint] = useState<string | null>(null);
   const hintNode = useRef<HTMLDivElement>(null);
   /*
@@ -492,6 +627,23 @@ export function Stickers({
       live = false;
     };
   }, []);
+
+  /*
+   * The markup, wrapped once each.
+   *
+   * React compares dangerouslySetInnerHTML by *reference*, not by the string
+   * inside it, so a fresh `{ __html }` written inline in the JSX is a new prop
+   * on every render and the element's innerHTML is set again — the artwork
+   * reparsed and replaced with fresh nodes. For eight static stickers that is
+   * only waste, paid on every hover, since what lands looks identical. For the
+   * clock it was the bug: the replacement arrives at 12 o'clock and the hands
+   * the tick had been moving are detached, so the first hover froze it there
+   * for good.
+   */
+  const inner = useMemo(
+    () => Object.fromEntries(Object.entries(markup).map(([id, m]) => [id, { __html: m }] as const)),
+    [markup],
+  );
 
   const layer = useRef<HTMLDivElement>(null);
   const nodes = useRef(new Map<string, HTMLElement>());
@@ -600,7 +752,7 @@ export function Stickers({
 
       placed.current.set(sticker.id, {
         ...best,
-        turn: restingTilt(),
+        turn: sticker.upright ? 0 : restingTilt(),
       });
       write(sticker.id);
     }
@@ -709,9 +861,9 @@ export function Stickers({
          * registered once and would otherwise be holding the `swept` and
          * `holding` it saw on mount.
          */
-        if (node.classList.contains('is-away')) continue;
+        if (inFlight(node)) continue;
         if (!leanToward(node, e.clientX, e.clientY)) continue;
-        if (over === null) over = sticker.label ?? null;
+        if (over === null && sticker.label) over = sticker.id;
       }
 
       // A mouse has taken the label over; it is no longer a tapped one.
@@ -776,7 +928,7 @@ export function Stickers({
          * A tapped sticker is leaning toward the finger and a swept one is on
          * its way off screen; the gyro drives everything else.
          */
-        if (id === hintFor.current || node.classList.contains('is-away')) continue;
+        if (id === hintFor.current || inFlight(node)) continue;
         node.classList.add('is-tilting');
         tilt(node, rx, ry);
       }
@@ -911,21 +1063,37 @@ export function Stickers({
    * it.
    */
   useEffect(() => {
-    for (const sticker of STICKERS) {
+    const landing: { node: HTMLElement; timer: number }[] = [];
+
+    STICKERS.forEach((sticker, i) => {
       const node = nodes.current.get(sticker.id);
       const at = placed.current.get(sticker.id);
-      if (!node || !at) continue;
+      if (!node || !at) return;
 
       // Face zoom clears everything that does not stay; a held tool clears
       // everything but its own.
       const away =
         (swept && !sticker.stay) || (holding !== 'idle' && sticker.project !== holding);
+      const returning = !away && node.classList.contains('is-away');
       node.classList.toggle('is-away', away);
 
       if (!away) {
+        if (returning) {
+          // Same two chores as the way out, for the same reason: the tilt has
+          // to go, and the trip needs a state that outlives this frame.
+          rest(node);
+          node.classList.add('is-settling');
+          landing.push({
+            node,
+            timer: window.setTimeout(
+              () => node.classList.remove('is-settling'),
+              RETURN_MS + i * SWEEP_STAGGER,
+            ),
+          });
+        }
         node.style.removeProperty('--sx');
         node.style.removeProperty('--sy');
-        continue;
+        return;
       }
 
       // Tilt state has to go with it, or the transition it suppresses never runs.
@@ -934,7 +1102,19 @@ export function Stickers({
       const toY = (at.y < 0.5 ? SWEEP_EDGE : 1 - SWEEP_EDGE) - at.y;
       node.style.setProperty('--sx', `calc(${toX} * (100vw - 2 * var(--gutter)))`);
       node.style.setProperty('--sy', `calc(${toY} * (100vh - 2 * var(--gutter)))`);
-    }
+    });
+
+    /*
+     * A sweep that arrives mid-return takes the trip over: the class would
+     * otherwise sit there past its timer and keep the sticker out of the
+     * pointer's reach for good.
+     */
+    return () => {
+      for (const { node, timer } of landing) {
+        window.clearTimeout(timer);
+        node.classList.remove('is-settling');
+      }
+    };
   }, [swept, holding]);
 
   const grab = (sticker: Sticker) => (e: React.PointerEvent<HTMLDivElement>) => {
@@ -972,7 +1152,7 @@ export function Stickers({
       }
       hintFor.current = sticker.id;
       leanToward(node, e.clientX, e.clientY);
-      setHint(sticker.label ?? null);
+      setHint(sticker.label ? sticker.id : null);
 
       arming = window.setTimeout(() => {
         armed = true;
@@ -1045,6 +1225,8 @@ export function Stickers({
     node.addEventListener('pointercancel', drop);
   };
 
+  const named = hint ? STICKERS.find((sticker) => sticker.id === hint) : undefined;
+
   return (
     <div className="stickers" ref={layer} aria-hidden="true">
       {STICKERS.map((sticker, i) => {
@@ -1063,17 +1245,16 @@ export function Stickers({
                 '--art': art,
                 '--span': sticker.span,
                 // Staggered, so they leave as a handful rather than in lockstep.
-                '--sweep-delay': `${i * 55}ms`,
+                '--sweep-delay': `${i * SWEEP_STAGGER}ms`,
                 aspectRatio: String(sticker.ratio),
               } as React.CSSProperties
             }
           >
-            <div
-              className="sticker__art"
-              dangerouslySetInnerHTML={
-                markup[sticker.id] ? { __html: markup[sticker.id] } : undefined
-              }
-            />
+            {sticker.clock ? (
+              <ClockFace art={inner[sticker.id]} />
+            ) : (
+              <div className="sticker__art" dangerouslySetInnerHTML={inner[sticker.id]} />
+            )}
             {sticker.normal && (
               <>
                 <NormalLight sticker={sticker} mode="shade" values={shadeMatrix(0, 0)} />
@@ -1086,7 +1267,7 @@ export function Stickers({
         );
       })}
 
-      {hint && createPortal(<StickerHint label={hint} hostRef={hintNode} />, document.body)}
+      {named && createPortal(<StickerHint sticker={named} hostRef={hintNode} />, document.body)}
     </div>
   );
 }
