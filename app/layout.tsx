@@ -1,5 +1,19 @@
 import type { Metadata, Viewport } from 'next';
+import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
+
 import './globals.css';
+
+/*
+ * Both beacons post to `/_vercel/...` on whatever host is serving the page, and
+ * only Vercel answers there. The same commit is also built for GitHub Pages —
+ * see next.config.mjs, where NEXT_PUBLIC_BASE_PATH is what switches that build
+ * on — and on that copy the requests would 404 in every visitor's console
+ * while collecting nothing. So the export leaves them out. The variable is
+ * inlined at build time, so this is a decision the bundle is built with rather
+ * than one the browser makes.
+ */
+const ON_VERCEL = !process.env.NEXT_PUBLIC_BASE_PATH;
 
 export const metadata: Metadata = {
   title: 'computer.kare.service',
@@ -25,7 +39,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {ON_VERCEL && (
+          <>
+            <Analytics />
+            <SpeedInsights />
+          </>
+        )}
+      </body>
     </html>
   );
 }
