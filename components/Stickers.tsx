@@ -112,7 +112,28 @@ const FACE_CLEAR = { left: 0.38, right: 0.62, top: 0.08, bottom: 0.3 };
  * clearing it outranks trimming a bigger overlap off her body.
  */
 const FACE_WEIGHT = 12;
-const PLACEMENT_TRIES = 48;
+/*
+ * How much heavier a square shared with another sticker counts than one shared
+ * with her body. Above the body's weight on purpose: a sticker over her sleeve
+ * is the scatter doing its job, while two stickers on the same spot hide each
+ * other's artwork, so when only one of the two can be avoided this is the one
+ * to avoid. Still under FACE_WEIGHT — nothing is worth covering her face for.
+ */
+const PEER_WEIGHT = 6;
+/*
+ * Breathing room demanded around a sticker already placed, in fractions of the
+ * layer. Counted as part of its box, so a draw that merely touches is charged
+ * for it and the search prefers a real gap to a shave.
+ */
+const PEER_GAP = 0.015;
+/*
+ * Draws per sticker. Higher than it was, because avoiding the others as well as
+ * her is a much narrower target than avoiding her alone — the free ground is
+ * two tall bands beside her, and hitting a free stretch of one by chance takes
+ * more than a couple of dozen throws. It is a one-off loop over nine stickers,
+ * so the cost of being thorough here is nothing.
+ */
+const PLACEMENT_TRIES = 240;
 
 type Zone = typeof KEEP_CLEAR;
 
@@ -122,7 +143,28 @@ function overlap(zone: Zone, x: number, y: number, halfW: number, halfH: number)
   const h = Math.min(zone.bottom, y + halfH) - Math.max(zone.top, y - halfH);
   return Math.max(0, w) * Math.max(0, h);
 }
-const MAX_TILT = 14;
+/*
+ * The resting lean, in degrees off upright.
+ *
+ * Drawn away from zero rather than around it. A plain +-14 draw puts as many
+ * stickers within a couple of degrees of straight as it does at a real angle,
+ * and a board of nearly-straight stickers reads as a board someone lined up
+ * badly rather than one they threw down — so there is a floor, and no sticker
+ * lands upright by accident.
+ *
+ * TILT_BIAS shapes the magnitude inside the range: under 1 it leans the draw
+ * toward the far end, so the average lean sits high in the range instead of in
+ * the middle of it. Both signs stay equally likely.
+ */
+const TILT_MIN = 6;
+const TILT_MAX = 24;
+const TILT_BIAS = 0.6;
+
+function restingTilt() {
+  const sign = Math.random() < 0.5 ? -1 : 1;
+  const reach = Math.pow(Math.random(), TILT_BIAS);
+  return sign * (TILT_MIN + (TILT_MAX - TILT_MIN) * reach);
+}
 
 /** The reference clamps its card to 15 degrees; keep that. */
 const MAX_TILT_ANGLE = 15;
@@ -449,18 +491,38 @@ export function Stickers({
     const h = field?.clientHeight || window.innerHeight;
     const spot = () => MARGIN + Math.random() * (1 - MARGIN * 2);
 
+    /*
+     * Measured rather than derived: --size is a fraction of the viewport's vmin
+     * and the layer is the stage inset from it, with a scale that changes at the
+     * phone breakpoint on top. The rendered box already knows all of that. Read
+     * before write(), so no rotation is in it yet — a resting tilt grows the box
+     * by a few percent, which is inside the slack the zones are padded with.
+     */
+    const half = new Map<string, { halfW: number; halfH: number }>();
     for (const sticker of STICKERS) {
-      /*
-       * Measured rather than derived: --size is a fraction of the viewport's
-       * vmin and the layer is the stage inset from it, with a scale that
-       * changes at the phone breakpoint on top. The rendered box already knows
-       * all of that. Read before write(), so no rotation is in it yet — a
-       * resting tilt grows the box by a few percent, which is inside the slack
-       * the zones are padded with.
-       */
       const box = nodes.current.get(sticker.id)?.getBoundingClientRect();
-      const halfW = box ? box.width / 2 / w : 0;
-      const halfH = box ? box.height / 2 / h : 0;
+      half.set(sticker.id, {
+        halfW: box ? box.width / 2 / w : 0,
+        halfH: box ? box.height / 2 / h : 0,
+      });
+    }
+
+    /*
+     * Biggest first. Whoever goes last is choosing from what is left, and a
+     * banner-sized sticker left until then has nowhere to be — where a button
+     * in the same position still has plenty of gaps to drop into.
+     */
+    const order = [...STICKERS].sort((a, b) => {
+      const A = half.get(a.id)!;
+      const B = half.get(b.id)!;
+      return B.halfW * B.halfH - A.halfW * A.halfH;
+    });
+
+    /* The boxes already spoken for, padded by PEER_GAP, as zones to avoid. */
+    const taken: Zone[] = [];
+
+    for (const sticker of order) {
+      const { halfW, halfH } = half.get(sticker.id)!;
 
       /*
        * Bounded, and it keeps the least bad draw rather than the last one: a
@@ -474,18 +536,27 @@ export function Stickers({
       for (let i = 0; i < PLACEMENT_TRIES && cost > 0; i++) {
         const x = spot();
         const y = spot();
-        const c =
+        let c =
           overlap(KEEP_CLEAR, x, y, halfW, halfH) +
           FACE_WEIGHT * overlap(FACE_CLEAR, x, y, halfW, halfH);
+        // A sticker already down is just another zone to keep clear of.
+        for (const zone of taken) c += PEER_WEIGHT * overlap(zone, x, y, halfW, halfH);
         if (c < cost) {
           cost = c;
           best = { x, y };
         }
       }
 
+      taken.push({
+        left: best.x - halfW - PEER_GAP,
+        right: best.x + halfW + PEER_GAP,
+        top: best.y - halfH - PEER_GAP,
+        bottom: best.y + halfH + PEER_GAP,
+      });
+
       placed.current.set(sticker.id, {
         ...best,
-        turn: (Math.random() * 2 - 1) * MAX_TILT,
+        turn: restingTilt(),
       });
       write(sticker.id);
     }

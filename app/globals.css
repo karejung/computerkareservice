@@ -788,13 +788,16 @@ body:has(.hint) .custom-cursor {
 
 /*
  * Carries the squircle clip, so the gradient and the checkers over it both take
- * the tile's shape. Opaque: the canvas behind must not read through it.
+ * the tile's shape. Held at 60% so the scene reads through the bed while the
+ * item on top of it stays solid — the opacity is on this layer alone, not on
+ * .inventory, which would take the thumbnail and the outline down with it.
  */
 .inventory__ground {
   position: absolute;
   inset: 0;
   clip-path: url(#inventory-squircle);
   background: linear-gradient(to bottom, var(--ground-top), var(--ground-bottom));
+  opacity: 0.6;
 }
 
 /*
