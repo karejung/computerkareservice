@@ -197,12 +197,15 @@ function GroundAndFit({
   floor,
   home,
   front,
+  onFit,
 }: {
   group: React.RefObject<THREE.Group | null>;
   floor: React.RefObject<THREE.Mesh | null>;
   home: React.MutableRefObject<CameraShot | null>;
   /** Same nonce CameraFocus takes; clears the remembered orbit with it. */
   front: number;
+  /** First time the model is framed — the loader waits on this. */
+  onFit?: () => void;
 }) {
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const controls = useThree((s) => s.controls) as OrbitControlsImpl | null;
@@ -213,12 +216,22 @@ function GroundAndFit({
   const settled = useRef(0);
   const orbited = useRef(false);
   const facing = useRef(BODY_DIR.clone());
+  const announced = useRef(false);
+  const onFitRef = useRef(onFit);
+  onFitRef.current = onFit;
+
+  const announce = () => {
+    if (announced.current) return;
+    announced.current = true;
+    onFitRef.current?.();
+  };
 
   useEffect(() => {
     if (!controls) return;
     const yield_ = () => {
       done.current = true;
       orbited.current = true;
+      announce();
     };
     controls.addEventListener('start', yield_);
     return () => controls.removeEventListener('start', yield_);
@@ -261,6 +274,7 @@ function GroundAndFit({
     // Keep fitting until the measurement stops growing. The first frames that
     // have a mesh in them can still be measuring a skeleton the mixer has not
     // posed yet, and a fit taken then locks the camera in far too close.
+    const wasDone = done.current;
     if (extent.y > tallest.current * 1.01) {
       tallest.current = extent.y;
       settled.current = 0;
@@ -303,6 +317,8 @@ function GroundAndFit({
       minDistance: controls.minDistance,
       maxDistance: controls.maxDistance,
     };
+
+    if (!wasDone && done.current) announce();
   });
 
   return null;
@@ -543,12 +559,14 @@ function Floor({
 }
 
 export default function Scene({
-  onVsign,
+  onReady,
 }: {
-  /* Unused now that the sticker layer lives in here; kept off the page. */
-  onVsign?: never;
+  onReady?: () => void;
 }) {
   const [faceZoom, setFaceZoom] = useState(false);
+  const [live, setLive] = useState(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
   const model = useRef<THREE.Group>(null);
   const floor = useRef<THREE.Mesh>(null);
   const kare = useRef<KareHandle>(null);
@@ -656,7 +674,16 @@ export default function Scene({
             minPolarAngle={MIN_POLAR}
             maxPolarAngle={MAX_POLAR}
           />
-          <GroundAndFit group={model} floor={floor} home={home} front={front} />
+          <GroundAndFit
+            group={model}
+            floor={floor}
+            home={home}
+            front={front}
+            onFit={() => {
+              setLive(true);
+              onReadyRef.current?.();
+            }}
+          />
           <CameraFocus group={model} home={home} face={faceZoom} front={front} />
 
           <Bloom
@@ -677,24 +704,30 @@ export default function Scene({
         * establishes its own, so a sticker layer up at page level could never
         * be slipped under controls that lived in the card.
         */}
-      <Stickers
-        swept={faceZoom}
-        holding={mode}
-        onVsign={() => goEmpty(() => kare.current?.playVsign())}
-      />
+      {live && (
+        <Stickers
+          swept={faceZoom}
+          holding={mode}
+          onVsign={() => goEmpty(() => kare.current?.playVsign())}
+        />
+      )}
 
-      <ZoomButton active={faceZoom} onToggle={() => goEmpty(() => setFaceZoom((v) => !v))} />
+      {live && (
+        <ZoomButton active={faceZoom} onToggle={() => goEmpty(() => setFaceZoom((v) => !v))} />
+      )}
 
-      <Inventory
-        ref={inventory}
-        busy={busy}
-        dimmed={faceZoom}
-        onArrow={onArrow}
-        onSettled={() => {
-          if (mode === wanted) setBusy(false);
-        }}
-        onSelect={(kind) => setWanted(kind === 'unknown' ? 'idle' : kind)}
-      />
+      {live && (
+        <Inventory
+          ref={inventory}
+          busy={busy}
+          dimmed={faceZoom}
+          onArrow={onArrow}
+          onSettled={() => {
+            if (mode === wanted) setBusy(false);
+          }}
+          onSelect={(kind) => setWanted(kind === 'unknown' ? 'idle' : kind)}
+        />
+      )}
     </div>
   );
 }

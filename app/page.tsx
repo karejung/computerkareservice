@@ -1,7 +1,9 @@
 'use client';
 
+import { useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
 
+import { Loader } from '@/components/Loader';
 
 const Scene = dynamic(() => import('@/components/Scene'), { ssr: false });
 
@@ -18,12 +20,17 @@ const Scene = dynamic(() => import('@/components/Scene'), { ssr: false });
  * lands in the empty column.
  */
 export default function Page() {
+  const [ready, setReady] = useState(false);
+  const [gone, setGone] = useState(false);
+  const onReady = useCallback(() => setReady(true), []);
+  const onFaded = useCallback(() => setGone(true), []);
+
   return (
     <main className="split is-solo">
       <section className="split__stage">
-        <Scene />
+        <Scene onReady={onReady} />
+        {!gone && <Loader done={ready} onFaded={onFaded} />}
       </section>
-
     </main>
   );
 }

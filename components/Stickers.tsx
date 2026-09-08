@@ -46,6 +46,8 @@ type Sticker = {
   label?: string;
   /** Opened in a new tab when the sticker is tapped rather than dragged. */
   href?: string;
+  /** Stays put when the face zoom sweeps the rest off. */
+  stay?: boolean;
 };
 
 const STICKERS: Sticker[] = [
@@ -61,30 +63,73 @@ const STICKERS: Sticker[] = [
     ratio: 1,
     normal: 'ds-normal.svg',
     project: 'ds',
-    label: 'Download Aero Aquarium',
+    label: 'Aero Aquarium',
     href: 'https://aeroaquarium.vercel.app/',
   },
-  { id: 'vsign', file: 'button.svg', span: 0.075, ratio: 64 / 71, action: 'vsign' },
+  { id: 'vsign', file: 'button.svg', span: 0.075, ratio: 64 / 71, action: 'vsign', stay: true },
+  {
+    id: 'ig',
+    file: 'button-1.svg',
+    span: 0.075,
+    ratio: 64 / 71,
+    label: '@computer.kare.service',
+    href: 'https://www.instagram.com/computer.kare.service/',
+    stay: true,
+  },
+  {
+    id: 'mail',
+    file: 'button-2.svg',
+    /*
+     * Same 64px disc as button-1, sitting in a 72px frame that holds the drop
+     * shadow. Span is scaled so the disc matches rather than the box.
+     */
+    span: 0.075 * (72 / 64),
+    ratio: 1,
+    label: 'kareservic3@gmail.com',
+    href: 'mailto:kareservic3@gmail.com',
+    stay: true,
+  },
 ];
 
 /** Keep the scatter off the edges so nothing lands half out of the window. */
 const MARGIN = 0.12;
 
 /*
- * The column the avatar stands in, in viewport fractions. Scattering is
- * rejection-sampled against it so nothing lands on her face — tested against
- * the sticker's centre rather than its box, so an edge may still drift over
- * her, which is what keeps it looking scattered rather than parted down the
- * middle.
+ * The column the avatar stands in, in fractions of the sticker layer.
+ * Scattering is rejection-sampled against it, and against her face separately:
+ * a sticker over her arm is scatter, one over her face is in the way.
+ *
+ * Her head is where the camera puts it, not where anything here declares it —
+ * GroundAndFit frames the whole body with 1.35 of padding and centres it, so
+ * she runs from about 0.13 to 0.87 down the stage and the head takes the top
+ * eighth of that. These are that, rounded out a little.
  */
 const KEEP_CLEAR = { left: 0.34, right: 0.66, top: 0.1, bottom: 0.9 };
-const PLACEMENT_TRIES = 24;
+const FACE_CLEAR = { left: 0.38, right: 0.62, top: 0.08, bottom: 0.3 };
+/*
+ * How much heavier a square of face counts than a square of body. The face is
+ * a fifth of the column's area, so it takes a multiplier this large before
+ * clearing it outranks trimming a bigger overlap off her body.
+ */
+const FACE_WEIGHT = 12;
+const PLACEMENT_TRIES = 48;
+
+type Zone = typeof KEEP_CLEAR;
+
+/** Area the sticker's box shares with a zone; 0 when they are disjoint. */
+function overlap(zone: Zone, x: number, y: number, halfW: number, halfH: number) {
+  const w = Math.min(zone.right, x + halfW) - Math.max(zone.left, x - halfW);
+  const h = Math.min(zone.bottom, y + halfH) - Math.max(zone.top, y - halfH);
+  return Math.max(0, w) * Math.max(0, h);
+}
 const MAX_TILT = 14;
 
 /** The reference clamps its card to 15 degrees; keep that. */
 const MAX_TILT_ANGLE = 15;
 /** Degrees of hand movement to reach full tilt. */
 const GYRO_GAIN = 0.6;
+/** The same thing the other way round: hand degrees that reach the clamp. */
+const GYRO_SPAN = MAX_TILT_ANGLE / GYRO_GAIN;
 /** How far a sticker leans toward the cursor, as a share of its own width. */
 const MAGNET = 6;
 /** Pointer travel, in px, under which a press counts as a tap and not a drag. */
@@ -125,6 +170,18 @@ const SWEEP_EDGE = 0;
  */
 const LIGHT_REST = { x: 78, y: 16 };
 const LIGHT_SWING = 30;
+/*
+ * How close to the edge the highlight's centre may get, in percent of the
+ * sticker's box. The swing is measured from a rest point already up in the
+ * corner, so a full lean took the centre clean off the artwork — 108% across
+ * and -14% down — leaving only the dim tail of the disc on the sticker. With a
+ * pointer that is a corner of the hover range; with a gyro it is most of the
+ * tilt range, which is why the light read as not moving at all on a phone.
+ */
+const LIGHT_EDGE = 12;
+
+/** Keeps the highlight's centre on the artwork rather than off its corner. */
+const onSticker = (v: number) => Math.min(100 - LIGHT_EDGE, Math.max(LIGHT_EDGE, v));
 
 /*
  * The rake of the resting light, in screen terms: up and to the right, the same
@@ -194,6 +251,9 @@ type Placed = { x: number; y: number; turn: number };
  */
 const HINT_STROKE = 8;
 
+/** Anything past half the label's height caps out; 9999 is the CSS idiom. */
+const HINT_RADIUS = 9999;
+
 /*
  * The label that replaces the cursor over a sticker that has one. Same outline
  * and the same corner as the inventory tile — the checker bed and the icon are
@@ -222,10 +282,12 @@ function StickerHint({
 
       /*
        * Fully round: squirclePath clamps the reach to half the shorter side, so
-       * handing it the longer one always lands on the maximum and the ends come
-       * out as caps however wide the text makes the box.
+       * any reach past that lands on the maximum and the ends come out as caps
+       * however wide the text makes the box. No smoothing, unlike the tile —
+       * a smoothed corner at full reach gives a superellipse tip rather than
+       * the semicircle a pill needs.
        */
-      const d = squirclePath(width, height, Math.max(width, height));
+      const d = squirclePath(width, height, HINT_RADIUS, 0);
       el.querySelector('svg')?.setAttribute('viewBox', `0 0 ${width} ${height}`);
       // Both copies: one draws, one clips it back to itself.
       for (const path of el.querySelectorAll('path')) path.setAttribute('d', d);
@@ -314,7 +376,7 @@ export function Stickers({
   holding = 'idle',
 }: {
   onVsign?: () => void;
-  /** Face zoom is on: clear every sticker out of the way. */
+  /** Face zoom is on: clear every sticker out of the way, except those that stay. */
   swept?: boolean;
   /** What Kare has in her hands, so its own sticker can stay. */
   holding?: 'idle' | 'ds' | 'pc' | 'phone';
@@ -382,27 +444,47 @@ export function Stickers({
   // Scatter once. Scene mounts client-only, so there is no server render to
   // disagree with.
   useEffect(() => {
+    const field = layer.current;
+    const w = field?.clientWidth || window.innerWidth;
+    const h = field?.clientHeight || window.innerHeight;
     const spot = () => MARGIN + Math.random() * (1 - MARGIN * 2);
-    const clear = (x: number, y: number) =>
-      x < KEEP_CLEAR.left ||
-      x > KEEP_CLEAR.right ||
-      y < KEEP_CLEAR.top ||
-      y > KEEP_CLEAR.bottom;
 
     for (const sticker of STICKERS) {
-      let x = spot();
-      let y = spot();
-      // Bounded, and it keeps the last draw if it runs out: a narrow window can
-      // leave almost nothing outside the column, and a sticker somewhere beats
-      // a loop that will not end.
-      for (let i = 0; i < PLACEMENT_TRIES && !clear(x, y); i++) {
-        x = spot();
-        y = spot();
+      /*
+       * Measured rather than derived: --size is a fraction of the viewport's
+       * vmin and the layer is the stage inset from it, with a scale that
+       * changes at the phone breakpoint on top. The rendered box already knows
+       * all of that. Read before write(), so no rotation is in it yet — a
+       * resting tilt grows the box by a few percent, which is inside the slack
+       * the zones are padded with.
+       */
+      const box = nodes.current.get(sticker.id)?.getBoundingClientRect();
+      const halfW = box ? box.width / 2 / w : 0;
+      const halfH = box ? box.height / 2 / h : 0;
+
+      /*
+       * Bounded, and it keeps the least bad draw rather than the last one: a
+       * phone-sized sticker can be wider than the gap beside her, so there may
+       * be no placement that clears her at all — and one overlapping her
+       * sleeve beats a loop that will not end, or a scatter that gives up and
+       * drops the thing on her face.
+       */
+      let best = { x: 0.5, y: 0.5 };
+      let cost = Infinity;
+      for (let i = 0; i < PLACEMENT_TRIES && cost > 0; i++) {
+        const x = spot();
+        const y = spot();
+        const c =
+          overlap(KEEP_CLEAR, x, y, halfW, halfH) +
+          FACE_WEIGHT * overlap(FACE_CLEAR, x, y, halfW, halfH);
+        if (c < cost) {
+          cost = c;
+          best = { x, y };
+        }
       }
 
       placed.current.set(sticker.id, {
-        x,
-        y,
+        ...best,
         turn: (Math.random() * 2 - 1) * MAX_TILT,
       });
       write(sticker.id);
@@ -446,8 +528,8 @@ export function Stickers({
     // the sticker rather than pooling under it.
     const lx = pull ? -pull.x : -ry / MAX_TILT_ANGLE;
     const ly = pull ? -pull.y : rx / MAX_TILT_ANGLE;
-    node.style.setProperty('--gx', `${LIGHT_REST.x + lx * LIGHT_SWING}%`);
-    node.style.setProperty('--gy', `${LIGHT_REST.y + ly * LIGHT_SWING}%`);
+    node.style.setProperty('--gx', `${onSticker(LIGHT_REST.x + lx * LIGHT_SWING)}%`);
+    node.style.setProperty('--gy', `${onSticker(LIGHT_REST.y + ly * LIGHT_SWING)}%`);
 
     node
       .querySelector('.sticker__lit--shade feColorMatrix')
@@ -541,11 +623,39 @@ export function Stickers({
   useEffect(() => {
     let base: { beta: number; gamma: number } | null = null;
 
+    /*
+     * Shortest way round. beta wraps at ±180, so a phone held near the seam
+     * reads a two-degree nod as a 358-degree lurch and pins the tilt.
+     */
+    const swing = (now: number, from: number) => {
+      const d = (now - from) % 360;
+      if (d > 180) return d - 360;
+      if (d < -180) return d + 360;
+      return d;
+    };
+
     const turn = (e: DeviceOrientationEvent) => {
       if (e.beta === null || e.gamma === null) return;
       if (!base) base = { beta: e.beta, gamma: e.gamma };
-      const rx = clamp((e.beta - base.beta) * GYRO_GAIN);
-      const ry = clamp((e.gamma - base.gamma) * GYRO_GAIN);
+
+      const db = swing(e.beta, base.beta);
+      const dg = swing(e.gamma, base.gamma);
+
+      /*
+       * The baseline is dragged along by however far the reading has gone past
+       * the point where the tilt clamps. Its first value is whatever angle the
+       * phone happened to be at when the page loaded — flat on a desk, say —
+       * and a hand that then settles somewhere else is permanently outside the
+       * range: the tilt sticks at 15 degrees and the highlight sits parked off
+       * the artwork's corner, which is exactly "only the tilt moves and the
+       * light never shows". Inside the range the baseline does not move, so a
+       * phone held normally still has a stable rest orientation.
+       */
+      base.beta += db - Math.min(GYRO_SPAN, Math.max(-GYRO_SPAN, db));
+      base.gamma += dg - Math.min(GYRO_SPAN, Math.max(-GYRO_SPAN, dg));
+
+      const rx = clamp(db * GYRO_GAIN);
+      const ry = clamp(dg * GYRO_GAIN);
       for (const [id, node] of nodes.current) {
         /*
          * A tapped sticker is leaning toward the finger and a swept one is on
@@ -656,8 +766,10 @@ export function Stickers({
       const at = placed.current.get(sticker.id);
       if (!node || !at) continue;
 
-      // Face zoom clears everything; a held tool clears everything but its own.
-      const away = swept || (holding !== 'idle' && sticker.project !== holding);
+      // Face zoom clears everything that does not stay; a held tool clears
+      // everything but its own.
+      const away =
+        (swept && !sticker.stay) || (holding !== 'idle' && sticker.project !== holding);
       node.classList.toggle('is-away', away);
 
       if (!away) {
@@ -764,8 +876,15 @@ export function Stickers({
       const acts = tapped && (!touch || armed);
       disarm();
       if (acts && sticker.action === 'vsign') onVsign?.();
-      // noopener so the new tab cannot reach back through window.opener.
-      if (acts && sticker.href) window.open(sticker.href, '_blank', 'noopener');
+      if (acts && sticker.href) {
+        /*
+         * mailto: through window.open(_blank) leaves an empty tab behind the
+         * mail client. Assigning it on this window is what the protocol is
+         * for — the page stays put, the composer opens.
+         */
+        if (sticker.href.startsWith('mailto:')) window.location.assign(sticker.href);
+        else window.open(sticker.href, '_blank', 'noopener');
+      }
       node.removeEventListener('pointermove', drag);
       node.removeEventListener('pointerup', drop);
       node.removeEventListener('pointercancel', drop);

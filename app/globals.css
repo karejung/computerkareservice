@@ -166,6 +166,132 @@ html {
 }
 
 /*
+ * Loading stand-in for the canvas card: same box, same --ui corner, same fill.
+ * The page ground shows in the gutter around it; stickers and the picker wait
+ * until the model is framed.
+ */
+.loader {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  --ui: clamp(40px, min(calc(34cqw - 24px), calc(36cqh - 50px)), 168px);
+  pointer-events: none;
+  transition: opacity 280ms ease;
+}
+
+.loader.is-done {
+  opacity: 0;
+}
+
+.loader__card {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  background: #d5d7db;
+  pointer-events: auto;
+}
+
+.loader.is-done .loader__card {
+  pointer-events: none;
+}
+
+/*
+ * The whole ring turns; the five stars are pinned to it in a short arc, so what
+ * travels is one line of stars nose to tail rather than five separate blinks.
+ * `--step` is the gap between them: a full 72deg would close the arc into an
+ * even ring, and this much less than that is what reads as a tail.
+ */
+.loader__orbit {
+  --step: 48deg;
+
+  position: relative;
+  width: min(32vmin, 180px);
+  height: min(32vmin, 180px);
+  animation: loader-orbit 1.5s linear infinite;
+}
+
+/*
+ * Two rotations either side of the offset: the first walks the seat round the
+ * ring, the second takes that angle back off the star, so it rides the circle
+ * without leaning into it. The graded scale is the tail thinning out behind the
+ * head — the ring turns toward the last seat, so that one is the head and the
+ * grade runs up to it. The seat can carry it because its own transform never
+ * animates.
+ */
+.loader__seat {
+  --i: 0;
+  --tail: 1;
+
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26%;
+  height: 26%;
+  translate: -50% -50%;
+  transform: rotate(calc(var(--i) * var(--step))) translateY(-132%)
+    rotate(calc(var(--i) * var(--step) * -1)) scale(var(--tail));
+  opacity: var(--tail);
+}
+
+.loader__seat:nth-child(1) {
+  --tail: 0.34;
+}
+
+.loader__seat:nth-child(2) {
+  --tail: 0.5;
+}
+
+.loader__seat:nth-child(3) {
+  --tail: 0.66;
+}
+
+.loader__seat:nth-child(4) {
+  --tail: 0.82;
+}
+
+.loader__seat:nth-child(5) {
+  --tail: 1;
+}
+
+/*
+ * Undoing the ring's own turn, at its rate: without this a star drawn on a
+ * spinning parent spins with it, which is the in-place twirl the stars are
+ * meant not to have.
+ */
+.loader__star-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  animation: loader-orbit 1.5s linear infinite reverse;
+}
+
+@keyframes loader-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader__orbit {
+    animation: loader-pulse 1.4s ease-in-out infinite;
+  }
+
+  .loader__star-art {
+    animation: none;
+  }
+}
+
+@keyframes loader-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/*
  * Hiding the real cursor only makes sense where there is one to hide. A phone
  * has no pointer to stand in for, and `cursor: none` there would strand anyone
  * who later attaches a mouse with no cursor at all — so both halves of the
@@ -238,9 +364,19 @@ html {
    */
   --gx: 78%;
   --gy: 16%;
+  /*
+   * The drawn width, named so the holo and the glare can blur in proportion to
+   * it. Blurring by --sticker-scale instead had it backwards: the scale is 1.75
+   * on a phone, but 100vmin is the short side there, so the stickers come out
+   * *smaller* in pixels than on a desktop and were getting twice the blur —
+   * which spread the sheen so thin it read as no light at all.
+   */
+  --size: calc(var(--span) * var(--sticker-scale) * 100vmin);
+  --holo: 0.55;
+  --glare: 0.22;
 
   position: absolute;
-  width: calc(var(--span) * var(--sticker-scale) * 100vmin);
+  width: var(--size);
   pointer-events: auto;
   touch-action: none;
   cursor: grab;
@@ -257,6 +393,19 @@ html {
   transition:
     transform 500ms ease,
     filter 160ms ease;
+}
+
+/*
+ * A gyro moves every sticker at once and by the same amount, so there is no
+ * pointer sitting on one of them to say which one is being lit — the sheen has
+ * to carry on its own. After the base rule, not with the other mobile override
+ * above it: same specificity, so up there the desktop values would win.
+ */
+@media (max-width: 700px) {
+  .sticker {
+    --holo: 0.8;
+    --glare: 0.34;
+  }
 }
 
 /*
@@ -391,8 +540,8 @@ html {
    * boundaries between the rainbow's stops without touching the silhouette the
    * mask cuts — the edge stays as crisp as the artwork.
    */
-  filter: blur(calc(8px * var(--sticker-scale, 1)));
-  opacity: 0.55;
+  filter: blur(calc(var(--size) * 0.045));
+  opacity: var(--holo);
   mix-blend-mode: overlay;
   pointer-events: none;
 }
@@ -409,11 +558,11 @@ html {
   mask-position: center;
   background-image: radial-gradient(
     circle at var(--gx) var(--gy),
-    rgba(255, 255, 255, 0.22) 0%,
-    rgba(255, 255, 255, 0.08) 34%,
+    rgba(255, 255, 255, var(--glare)) 0%,
+    rgba(255, 255, 255, calc(var(--glare) * 0.36)) 34%,
     rgba(255, 255, 255, 0) 66%
   );
-  filter: blur(calc(6px * var(--sticker-scale, 1)));
+  filter: blur(calc(var(--size) * 0.034));
   pointer-events: none;
 }
 
@@ -432,12 +581,19 @@ html {
   z-index: 9999;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 20px 24px;
+  gap: 10px;
+  padding: 11px 16px;
   pointer-events: none;
   user-select: none;
   white-space: nowrap;
   will-change: transform;
+}
+
+@media (max-width: 700px) {
+  .hint {
+    gap: 8px;
+    padding: 8px 12px;
+  }
 }
 
 .hint__frame {
