@@ -54,12 +54,19 @@ html *,
   cursor: none !important;
 }
 
+/*
+ * --app-h is the height actually on screen, written by <ViewportSync> from the
+ * visual viewport. 100dvh is the fallback: correct before that mounts, and
+ * correct for good on anything whose toolbars do not drift. Not `100%`, which
+ * resolves against an initial containing block that is exactly the thing iOS
+ * gets wrong.
+ */
 html,
 body {
   margin: 0;
   padding: 0;
   width: 100%;
-  height: 100%;
+  height: var(--app-h, 100dvh);
   overflow: hidden;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
@@ -78,12 +85,25 @@ html {
 
 .split {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  width: 100%;
+  /* Sized rather than pinned to all four insets: `inset: 0` hands the height
+     back to the browser, which is the measurement that drifts. */
+  height: var(--app-h, 100dvh);
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr;
   gap: var(--gutter);
-  padding: var(--gutter);
+  /*
+   * The gutter, widened only where a notch or a home indicator actually
+   * intrudes — viewport-fit=cover (see app/layout.tsx) runs the page ground to
+   * the physical edges, and on a phone held sideways that would otherwise put a
+   * corner of the card under the notch.
+   */
+  padding: max(var(--gutter), env(safe-area-inset-top))
+    max(var(--gutter), env(safe-area-inset-right)) max(var(--gutter), env(safe-area-inset-bottom))
+    max(var(--gutter), env(safe-area-inset-left));
   /* Transparent so the page ground shows through the gutter around the stage. */
   background: transparent;
 }

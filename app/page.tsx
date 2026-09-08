@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 
 import { Loader } from '@/components/Loader';
+import { armGyro } from '@/lib/gyro';
 
 const Scene = dynamic(() => import('@/components/Scene'), { ssr: false });
 
@@ -24,6 +25,15 @@ export default function Page() {
   const [gone, setGone] = useState(false);
   const onReady = useCallback(() => setReady(true), []);
   const onFaded = useCallback(() => setGone(true), []);
+
+  /*
+   * Here rather than in <Stickers>, which is where it used to live: iOS only
+   * asks for orientation from a user gesture, and the sticker layer does not
+   * exist until the model is live — so the loader ate the first tap and the
+   * prompt waited on a second one that plenty of readers never gave. This
+   * mounts with the page, before there is anything to load. See lib/gyro.ts.
+   */
+  useEffect(armGyro, []);
 
   return (
     <main className="split is-solo">

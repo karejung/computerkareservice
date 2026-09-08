@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { asset } from '@/lib/asset';
+import { onGyro } from '@/lib/gyro';
 import { squirclePath } from '@/lib/squircle';
 
 /**
@@ -935,84 +936,12 @@ export function Stickers({
     };
 
     /*
-     * iOS hands out orientation only after an explicit grant, and only from a
-     * gesture — so ask on the first touch and never again either way.
+     * Subscription only. Asking for the permission is the page's job now — see
+     * lib/gyro.ts — because on iOS the ask has to be riding a listener when the
+     * reader's first tap lands, and this layer does not exist yet at that
+     * point: Scene holds it back until the model is live.
      */
-    if (typeof DeviceOrientationEvent === 'undefined') return;
-
-    /*
-     * Orientation is gated on a secure context in every current browser: Chrome
-     * drops the event without a word on an insecure origin, and iOS rejects the
-     * permission call. `http://localhost` counts as secure and the LAN address
-     * the dev server also prints does not — which is the address a phone has to
-     * use, so the tilt is dead on a phone for a reason that has nothing to do
-     * with the phone. Worth a line in the console, since neither browser gives
-     * one.
-     */
-    if (!window.isSecureContext) {
-      console.warn(
-        '[stickers] no gyro tilt: device orientation needs https (or localhost). ' +
-          `this page is ${window.location.origin}.`,
-      );
-    }
-
-    /*
-     * Feature-detected off the constructor, but *called* on it. Safari's
-     * requestPermission is a static method that checks its receiver, and the
-     * bare reference this used to keep and invoke as `permission()` arrives
-     * with `this` undefined — which throws a TypeError that the catch below
-     * then swallowed, so iOS asked for nothing, granted nothing, and reported
-     * nothing. Every other branch worked, which is why this looked like a
-     * missing sensor rather than a missing receiver.
-     */
-    const gate = DeviceOrientationEvent as unknown as {
-      requestPermission?: () => Promise<PermissionState>;
-    };
-    const permission = gate.requestPermission;
-
-    /*
-     * Two names for the same reading. Chrome on Android fires the plain one;
-     * some builds only ever fire the absolute one, and a browser that sends
-     * both just overwrites the same four properties twice.
-     */
-    const start = () => {
-      window.addEventListener('deviceorientation', turn);
-      window.addEventListener('deviceorientationabsolute', turn as EventListener);
-    };
-    const stop = () => {
-      window.removeEventListener('deviceorientation', turn);
-      window.removeEventListener('deviceorientationabsolute', turn as EventListener);
-    };
-
-    if (typeof permission !== 'function') {
-      start();
-      return stop;
-    }
-
-    const ask = () => {
-      window.removeEventListener('touchend', ask);
-      window.removeEventListener('pointerup', ask);
-      gate
-        .requestPermission!()
-        .then((state) => {
-          if (state === 'granted') start();
-          else console.warn(`[stickers] no gyro tilt: orientation ${state}.`);
-        })
-        .catch((err) => {
-          // Left visible on purpose. A rejection here is the whole feature
-          // failing, and it is the one thing a phone gives no other sign of.
-          console.warn('[stickers] no gyro tilt: permission call failed.', err);
-        });
-    };
-    // Either gesture will do; whichever lands first takes the other one down.
-    window.addEventListener('touchend', ask, { once: true });
-    window.addEventListener('pointerup', ask, { once: true });
-
-    return () => {
-      window.removeEventListener('touchend', ask);
-      window.removeEventListener('pointerup', ask);
-      stop();
-    };
+    return onGyro(turn);
   }, []);
 
   /*
@@ -1101,7 +1030,9 @@ export function Stickers({
       const toX = (at.x < 0.5 ? SWEEP_EDGE : 1 - SWEEP_EDGE) - at.x;
       const toY = (at.y < 0.5 ? SWEEP_EDGE : 1 - SWEEP_EDGE) - at.y;
       node.style.setProperty('--sx', `calc(${toX} * (100vw - 2 * var(--gutter)))`);
-      node.style.setProperty('--sy', `calc(${toY} * (100vh - 2 * var(--gutter)))`);
+      // --app-h, not 100vh: on iOS vh is the URL-bar-hidden height, which is the
+      // one measurement the rest of the layout has stopped trusting.
+      node.style.setProperty('--sy', `calc(${toY} * (var(--app-h, 100dvh) - 2 * var(--gutter)))`);
     });
 
     /*

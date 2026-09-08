@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Analytics } from '@vercel/analytics/next';
 import { SpeedInsights } from '@vercel/speed-insights/next';
 
+import { ViewportSync } from '@/components/ViewportSync';
 import './globals.css';
 
 /*
@@ -23,6 +24,12 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: '#e7e7e7',
+  /*
+   * The page ground runs under the notch and the home indicator rather than
+   * stopping at them, so the gutter around the card is the same on all four
+   * sides on a phone. The safe area is the browser's own chrome to keep clear.
+   */
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -40,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
+        <ViewportSync />
         {children}
         {ON_VERCEL && (
           <>
