@@ -5,41 +5,33 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { STAR_PINK, starSprite } from '@/lib/star';
 import { SquircleCard } from './SquircleCard';
 
-const RATIO = 0.38;
+/*
+ * Inner radius as a share of the outer. 0.38 is a star as it is normally drawn;
+ * this one is well past that, which is what makes it read as a fat sticker star
+ * rather than a spark — short points, and plenty of body between them for the
+ * 0.16 rounding to work on.
+ */
+const RATIO = 0.56;
 const OUTER = 0.84;
 
 /*
- * One ring, ten stars, nose to tail: the ring turns and they chase it round.
+ * One ring, ten stars, big and small about it: the ring turns and every star
+ * trades size with the two beside it as it goes.
  *
  * The step is the whole circle divided by the count, so the ring is always
  * closed — the ten of them ring the circle at every instant rather than
- * bunching into an arc with a gap behind it.
+ * bunching into an arc with a gap behind it. Even, because alternating wants a
+ * count that closes: nine seats would put two of the same size side by side at
+ * the seam.
  */
 const COUNT = 10;
 const STEP = 360 / COUNT;
 
-/** How small the back of the tail gets, against 1 at the head. */
-const TAIL_END = 0.44;
-
 /*
- * Seconds of the twinkle, matching `--tw` in globals.css. Held here as well
- * because the per-star offset is a share of it, and a share needs the number.
+ * Seconds of one trade, matching `--swap` in globals.css. Held here as well
+ * because the per-seat offset is half of it, and a half needs the number.
  */
-const TWINKLE = 1.25;
-
-/*
- * The ring is one tail, not ten stars in a circle: size and fade both grade
- * along it, from a big solid head down to a small star that has faded to
- * nothing, so it reads as a trail off a wand that happens to close on itself.
- *
- * Both grades run up to the last seat, because the ring turns toward increasing
- * angle and that one leads. Something has to: an evenly graded circle of
- * identical stars turning is rotationally symmetric, and looks still however
- * fast it spins.
- */
-function shareAt(index: number): number {
-  return COUNT < 2 ? 1 : index / (COUNT - 1);
-}
+const SWAP = 1.6;
 
 /*
  * SVG stand-in so the stars are there on first paint, before the particle
@@ -107,9 +99,13 @@ export function Loader({
               style={
                 {
                   '--a': `${i * STEP}deg`,
-                  '--tail': TAIL_END + (1 - TAIL_END) * shareAt(i),
-                  '--fade': shareAt(i),
-                  '--tw-delay': `${(-(i / COUNT) * TWINKLE).toFixed(3)}s`,
+                  /*
+                   * Half a trade apart, and nothing else: the seat's place in
+                   * the ring says nothing about its size, only which half of
+                   * the swing it is currently in. Negative so odd seats open
+                   * already small rather than waiting a beat to shrink.
+                   */
+                  '--swap-delay': `${i % 2 ? -SWAP / 2 : 0}s`,
                 } as CSSProperties
               }
             >

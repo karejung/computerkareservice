@@ -51,9 +51,12 @@ type Sticker = {
 };
 
 const STICKERS: Sticker[] = [
-  { id: 'one', file: 'sticker-1.svg', span: 0.256, ratio: 590 / 230 },
-  { id: 'two', file: 'sticker-2.svg', span: 0.332, ratio: 944 / 192 },
-  { id: 'three', file: 'sticker-3.svg', span: 0.2, ratio: 419 / 230 },
+  // computer / kare / service: the name of the place, in three pieces. They
+  // stay for the face zoom — it is the one view with nothing else in it to say
+  // whose face it is.
+  { id: 'one', file: 'sticker-1.svg', span: 0.256, ratio: 590 / 230, stay: true },
+  { id: 'two', file: 'sticker-2.svg', span: 0.332, ratio: 944 / 192, stay: true },
+  { id: 'three', file: 'sticker-3.svg', span: 0.2, ratio: 419 / 230, stay: true },
   { id: 'four', file: 'sticker-4.svg', span: 0.18, ratio: 438 / 375 },
   { id: 'five', file: 'sticker-5.svg', span: 0.12, ratio: 221 / 216 },
   {
@@ -72,7 +75,7 @@ const STICKERS: Sticker[] = [
     label: 'Aero Aquarium',
     href: 'https://aeroaquarium.vercel.app/',
   },
-  { id: 'vsign', file: 'button.svg', span: 0.075, ratio: 64 / 71, action: 'vsign', stay: true },
+  { id: 'vsign', file: 'button.svg', span: 0.075, ratio: 64 / 71, action: 'vsign' },
   {
     id: 'ig',
     file: 'button-1.svg',

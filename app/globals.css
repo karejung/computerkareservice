@@ -211,8 +211,13 @@ html {
   --radius: calc(var(--box) * 0.36);
   --star: calc(var(--box) * 0.2);
   --dur: 2.6s;
-  /* One twinkle is shorter than one turn, so the sparkle laps the ring. */
-  --tw: 1.25s;
+  /*
+   * One trade of sizes. Deliberately not a divisor of the turn: when the two
+   * line up the ring comes back to the same arrangement at the same angle every
+   * lap, and a loader that repeats exactly reads as a loop rather than as
+   * something working.
+   */
+  --swap: 1.6s;
 
   position: relative;
   width: var(--box);
@@ -222,8 +227,8 @@ html {
 
 /*
  * Back to one even sweep. Stepping the ring seat by seat gave it a ratchet, and
- * a trail off a wand does not tick — it draws. The magic is put in by the
- * twinkle below instead, which is a thing happening on the stars rather than to
+ * a ring of stars does not tick — it turns. The life in it is put there by the
+ * trade below instead, which is a thing happening on the stars rather than to
  * the whole ring.
  */
 @keyframes loader-orbit {
@@ -233,37 +238,37 @@ html {
 }
 
 /*
- * The sparkle. Written on `scale` and `opacity` — the individual transform
- * property, not the `transform` shorthand — so it composes with the star's
- * counter-rotation instead of fighting it for the same declaration.
+ * The trade. Written on `scale` — the individual transform property, not the
+ * `transform` shorthand — so it composes with the star's counter-rotation
+ * instead of fighting it for the same declaration.
  *
- * The stagger is what makes it read as one light running along the tail rather
- * than ten stars breathing at once: each star is a step further through the
- * same twinkle than the one behind it.
+ * Every star runs this, and the seats alternate which half of it they are in,
+ * so the ring reads big-small-big-small and each star is on its way to being
+ * whatever its neighbours currently are. That is what carries the motion now:
+ * an evenly graded circle of identical stars turning is rotationally
+ * symmetric and looks still however fast it spins, and the tail this replaces
+ * broke that symmetry by picking a head, which made the ring a thing chasing
+ * itself. Alternating breaks it without pointing anywhere.
  */
-@keyframes loader-twinkle {
+@keyframes loader-swap {
   0%,
   100% {
-    scale: 0.78;
-    opacity: 0.7;
+    scale: 1;
+    opacity: 1;
   }
   50% {
-    scale: 1.18;
-    opacity: 1;
+    scale: 0.5;
+    /*
+     * Down with the size, and only a little: half scale at full strength read
+     * as a star that had moved further away rather than one on its way out, and
+     * a matching drop to half would have gone the other way and made them blink.
+     */
+    opacity: 0.72;
   }
 }
 
-/*
- * Two rotations either side of the offset: the first walks the seat round the
- * ring, the second takes that angle back off the star, so it rides the circle
- * without leaning into it. The graded scale and fade are the tail thinning out
- * behind the head, which the seat can carry because its own transform never
- * animates.
- */
 .loader__seat {
   --a: 0deg;
-  --tail: 1;
-  --fade: 1;
 
   position: absolute;
   left: 50%;
@@ -272,8 +277,7 @@ html {
   height: var(--star);
   translate: -50% -50%;
   transform: rotate(var(--a)) translateY(calc(var(--radius) * -1))
-    rotate(calc(var(--a) * -1)) scale(var(--tail));
-  opacity: var(--fade);
+    rotate(calc(var(--a) * -1));
 }
 
 /*
@@ -290,8 +294,9 @@ html {
   overflow: visible;
   animation:
     loader-orbit var(--dur) linear infinite reverse,
-    loader-twinkle var(--tw) ease-in-out infinite;
-  animation-delay: 0s, var(--tw-delay, 0s);
+    loader-swap var(--swap) ease-in-out infinite;
+  /* Negative, so a seat starts part-way through rather than waiting to begin. */
+  animation-delay: 0s, var(--swap-delay, 0s);
 }
 
 @media (prefers-reduced-motion: reduce) {

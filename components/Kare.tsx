@@ -51,6 +51,19 @@ const WINK_HOLD = 0.5;
 
 const GAZE_HOLD = 0.4;
 
+/*
+ * What she will follow with her eyes: the scene itself, and the stickers lying
+ * over it. Everything else on top of the canvas — the arrows, the zoom button —
+ * is a control, and a control being aimed at is not something happening in her
+ * room. She was tracking the cursor anywhere inside the canvas's box, which
+ * meant reaching for an arrow dragged her gaze along with it.
+ *
+ * Read off the topmost element at the point rather than off the event's target:
+ * the listener is on the window, so the target is whatever the pointer happens
+ * to be over anyway, and this asks the question directly.
+ */
+const GAZE_TARGET = 'canvas, .sticker';
+
 const FACE_NODE = key('FACE');
 
 const TINT_MATERIAL = key('black.001');
@@ -569,16 +582,18 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
       if (!gazeUntil.current) rig.current?.resetLook();
     };
     const move = (e: PointerEvent) => {
-      const frame = gl.domElement.getBoundingClientRect();
-      if (
-        e.clientX < frame.left ||
-        e.clientX > frame.right ||
-        e.clientY < frame.top ||
-        e.clientY > frame.bottom
-      ) {
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      if (!under?.closest(GAZE_TARGET)) {
         leave();
         return;
       }
+
+      /*
+       * Still measured against the canvas, and still clamped: a sticker may sit
+       * in the gutter outside it, and a gaze pegged to the near edge is the
+       * right answer for something just off the side of the room.
+       */
+      const frame = gl.domElement.getBoundingClientRect();
       const nx = clamp(((e.clientX - frame.left) / frame.width) * 2 - 1);
       const ny = clamp(((e.clientY - frame.top) / frame.height) * 2 - 1);
 
