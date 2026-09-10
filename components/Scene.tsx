@@ -11,6 +11,7 @@ import { asset } from '@/lib/asset';
 import { Kare, type KareHandle, type KareMode } from './Kare';
 import { Inventory, type InventoryHandle } from './Inventory';
 import { Stickers } from './Stickers';
+import { StickerToggle } from './StickerToggle';
 import { ZoomButton } from './ZoomButton';
 import { SquircleCard } from './SquircleCard';
 import { Bloom } from './Bloom';
@@ -564,6 +565,7 @@ export default function Scene({
   onReady?: () => void;
 }) {
   const [faceZoom, setFaceZoom] = useState(false);
+  const [stickersOn, setStickersOn] = useState(true);
   const [live, setLive] = useState(false);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
@@ -708,9 +710,12 @@ export default function Scene({
         <Stickers
           swept={faceZoom}
           holding={mode}
+          off={!stickersOn}
           onVsign={() => goEmpty(() => kare.current?.playVsign())}
         />
       )}
+
+      {live && <StickerToggle on={stickersOn} onToggle={() => setStickersOn((v) => !v)} />}
 
       {live && (
         <ZoomButton active={faceZoom} onToggle={() => goEmpty(() => setFaceZoom((v) => !v))} />

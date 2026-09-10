@@ -450,12 +450,152 @@ html {
    */
   transform: translate(-50%, -50%) translate(var(--sx, 0), var(--sy, 0))
     translate(var(--mx, 0), var(--my, 0)) perspective(500px)
-    rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) rotate(var(--turn, 0deg));
+    rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) rotate(var(--turn, 0deg))
+    scale(var(--pop-x, 1), var(--pop-y, 1));
   transform-style: preserve-3d;
   /* Eases back to rest on the way out; killed while a tilt is being driven. */
   transition:
     transform 500ms ease,
     filter 160ms ease;
+}
+
+/*
+ * The entrance. Registered, or the keyframes would step between whole numbers
+ * instead of interpolating — an unregistered custom property has no type to
+ * tween through, so a bounce written this way would arrive as three hard jumps.
+ *
+ * Two of them rather than one scale, because a bounce that keeps its
+ * proportions reads as a zoom. Squashing wide as it lands and stretching tall
+ * as it comes off the floor is the whole difference between growing and
+ * bouncing, and it costs one more property.
+ */
+@property --pop-x {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
+@property --pop-y {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
+/*
+ * Nowhere to be yet. The scatter is measured off the rendered boxes and so has
+ * to run after the first paint, which leaves one frame with every sticker
+ * stacked in the layer's top-left corner. They were only ever getting away
+ * with it because the loader was still over the top. components/Stickers adds
+ * `is-placed` in the same effect that writes the positions.
+ */
+.stickers:not(.is-placed) .sticker {
+  visibility: hidden;
+}
+
+/*
+ * One after the next, each landing with a couple of bounces left in it. The
+ * transition goes while it runs, for the same reason `is-tilting` drops it:
+ * every keyframe changes a property `transform` is composed from, so a live
+ * transform transition would chase each step 500ms behind and smear the bounce
+ * into a slow swell. components/Stickers takes `is-entering` off once the last
+ * one has landed, which hands the transition back.
+ */
+.stickers.is-entering .sticker:not(.is-away):not(.is-settling) {
+  animation: sticker-pop var(--pop-ms, 720ms) linear var(--pop-delay, 0ms) backwards;
+  transition: filter 160ms ease;
+}
+
+@keyframes sticker-pop {
+  0% {
+    --pop-x: 0;
+    --pop-y: 0;
+  }
+
+  /* Overshoots the mark on the way out, the way a thing thrown down does. */
+  32% {
+    --pop-x: 1.05;
+    --pop-y: 1.05;
+  }
+
+  /*
+   * Then the boing: wide and short, tall and narrow, damping to nothing. Kept
+   * shallow — every sticker on the board does this within a second and a half
+   * of each other, and an amplitude that reads well on one of them is the room
+   * pitching when it is ten.
+   */
+  46% {
+    --pop-x: 1.04;
+    --pop-y: 0.96;
+  }
+
+  62% {
+    --pop-x: 0.98;
+    --pop-y: 1.028;
+  }
+
+  78% {
+    --pop-x: 1.017;
+    --pop-y: 0.992;
+  }
+
+  90% {
+    --pop-x: 0.995;
+    --pop-y: 1.006;
+  }
+
+  100% {
+    --pop-x: 1;
+    --pop-y: 1;
+  }
+}
+
+/*
+ * Switched off: back down to nothing, in the same order they came up in and
+ * faster, since this is clearing the board rather than laying it out. `forwards`
+ * so they stay gone — and out of the pointer's way, or the board would still be
+ * catching drags it has no way to show.
+ *
+ * Turning them back on drops this class and puts `is-entering` back, and
+ * `sticker-pop` starts from the 0 they were left at, so the two meet without a
+ * step between them.
+ */
+.stickers.is-off .sticker {
+  animation: sticker-drop var(--drop-ms, 260ms) ease-in var(--drop-delay, 0ms) forwards;
+  transition: filter 160ms ease;
+  pointer-events: none;
+}
+
+@keyframes sticker-drop {
+  to {
+    --pop-x: 0;
+    --pop-y: 0;
+  }
+}
+
+/*
+ * They still arrive one at a time — the stagger is the part that says the board
+ * is being laid out rather than switched on — but each one simply appears.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .stickers.is-entering .sticker:not(.is-away):not(.is-settling) {
+    animation-name: sticker-appear;
+  }
+
+  .stickers.is-off .sticker {
+    animation-name: sticker-vanish;
+  }
+
+  @keyframes sticker-appear {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes sticker-vanish {
+    to {
+      opacity: 0;
+    }
+  }
 }
 
 /*
@@ -1050,6 +1190,100 @@ body:has(.hint) .custom-cursor {
 
 .zoom[aria-pressed='true'] .zoom__mark {
   fill: #ffffff;
+}
+
+/*
+ * The sticker switch, centred between the zoom mark and the picker arrows and
+ * sitting on their line: `--ui * 0.167` down puts the corner controls' top
+ * edge, and half of their 0.43 height further down is the middle of them, which
+ * is what this centres on.
+ *
+ * The box is the track — there is nothing beside it to lay out. Its height is
+ * the one number the rest is a fraction of, so the whole control scales as one.
+ * Clamped rather than left to --ui alone: the corner controls have room to
+ * shrink to 40px square and still read, and a switch does not.
+ *
+ * 1.7 tracks wide, which is stubby for a switch. A long thin one is a settings
+ * row; this is the only control on the board that is a shape rather than a
+ * mark, so it may as well be a shape worth looking at.
+ */
+.sticker-toggle {
+  /*
+   * The inventory tile's outline, to the pixel. Its frame is a stroke of 8
+   * clipped down the middle of itself by the squircle, so what is actually on
+   * screen is 4 — and non-scaling, so it stays 4 whatever --ui does. A border
+   * sits wholly inside its box already, so this is the same line said the
+   * shorter way.
+   */
+  --line: 4px;
+  --track: clamp(30px, calc(var(--ui) * 0.26), 46px);
+
+  position: absolute;
+  top: calc(var(--ui) * 0.382 - var(--track) / 2);
+  left: 50%;
+  z-index: 8;
+  margin: 0;
+  padding: 0;
+  width: calc(var(--track) * 1.7);
+  height: var(--track);
+  border: var(--line) solid var(--outline);
+  border-radius: 999px;
+  /* Flat: the line is the whole of it, and the scene shows through. */
+  background: transparent;
+  transform: translateX(-50%);
+  transition: transform 140ms ease;
+}
+
+/* The same give the zoom mark has, with the centring kept in front of it. */
+.sticker-toggle:active {
+  transform: translateX(-50%) scale(0.94);
+}
+
+/*
+ * --inset leaves the same gap on all four sides: half of what the knob does not
+ * fill of the inner height, which the border is already out of. Sliding it by
+ * 0.7 of the track then lands it exactly that far off the other end — the box
+ * is 1.7 tracks, so the two insets and the knob cancel, and the borders with
+ * them. Written as that ratio for the same reason: a px slide drifts
+ * off-centre the moment --ui moves.
+ */
+.sticker-toggle__knob {
+  --inner: calc(var(--track) - var(--line) * 2);
+  --knob: calc(var(--inner) * 0.82);
+  --inset: calc((var(--inner) - var(--knob)) / 2);
+
+  position: absolute;
+  top: 50%;
+  left: var(--inset);
+  width: var(--knob);
+  height: var(--knob);
+  border-radius: 50%;
+  /* The line's own grey, both ways: the switch is one colour and two positions. */
+  background: var(--outline);
+  transform: translateY(-50%);
+  /*
+   * Off is the knob almost all the way out, and the line left alone: the switch
+   * is a thing that stays on the board whether or not it is thrown, so dimming
+   * it whole read as the control itself being unavailable. With both states in
+   * the one grey, where the knob sits says which way it is thrown and how much
+   * of it is there says whether that is doing anything.
+   */
+  opacity: 0.2;
+  /* Carries a little past the end and comes back, so it lands rather than arrives. */
+  transition:
+    transform 260ms cubic-bezier(0.34, 1.7, 0.5, 1),
+    opacity 180ms ease;
+}
+
+.sticker-toggle[aria-checked='true'] .sticker-toggle__knob {
+  opacity: 1;
+  transform: translate(calc(var(--track) * 0.7), -50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sticker-toggle__knob {
+    transition: none;
+  }
 }
 
 .deck {

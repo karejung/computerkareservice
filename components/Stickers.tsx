@@ -306,6 +306,25 @@ const SWEEP_EDGE = 0;
 const RETURN_MS = 650;
 const SWEEP_STAGGER = 55;
 
+/*
+ * The first arrival: one sticker at a time, each landing with a bounce. Longer
+ * between them than the sweep's stagger, which is a handful of stickers leaving
+ * together — this one is meant to be counted, so the board reads as being laid
+ * out rather than switched on. The curve itself is in globals.css
+ * (`sticker-pop`); the duration is here so the class can come off on time.
+ */
+const POP_MS = 720;
+const POP_STAGGER = 85;
+
+/*
+ * And the way back out, when the switch turns the layer off. Quicker and in a
+ * tighter stagger than the arrival: clearing the board is not the part worth
+ * watching, and the wait before the last one goes is dead time on a control
+ * whose whole job is to get them out of the way.
+ */
+const DROP_MS = 260;
+const DROP_STAGGER = 30;
+
 /** Out of play for the pointer and the gyro alike: in flight, either way. */
 const inFlight = (node: HTMLElement) =>
   node.classList.contains('is-away') || node.classList.contains('is-settling');
@@ -612,12 +631,19 @@ export function Stickers({
   onVsign,
   swept = false,
   holding = 'idle',
+  off = false,
 }: {
   onVsign?: () => void;
   /** Face zoom is on: clear every sticker out of the way, except those that stay. */
   swept?: boolean;
   /** What Kare has in her hands, so its own sticker can stay. */
   holding?: 'idle' | 'ds' | 'pc' | 'phone';
+  /*
+   * The switch is off: the whole layer goes, `stay` and all. Kept mounted while
+   * it is, so the scatter is not re-rolled and anything dragged somewhere better
+   * is still there when it comes back.
+   */
+  off?: boolean;
 }) {
   /*
    * The artwork is inlined rather than left as a background image. Three of
@@ -792,7 +818,44 @@ export function Stickers({
       });
       write(sticker.id);
     }
+
+    // Everything has somewhere to be now, so let them be seen. What they do on
+    // the way in is the next effect's, which runs after this one and again
+    // every time the switch moves.
+    field?.classList.add('is-placed');
   }, []);
+
+  /*
+   * On and off. `is-entering` carries the bounce and has to come off again:
+   * while it is on it holds the transform transition off, which the drag and
+   * the gyro both want back once the board has settled. The last sticker starts
+   * the full stagger late, so that is when the trip is over.
+   *
+   * `is-off` is the opposite and stays on, since being gone is a state rather
+   * than a trip. Declared after the scatter so it runs after it on the mount
+   * they share, which is what puts the first bounce on placed stickers.
+   */
+  useEffect(() => {
+    const field = layer.current;
+    if (!field) return;
+
+    if (off) {
+      field.classList.remove('is-entering');
+      field.classList.add('is-off');
+      return;
+    }
+
+    field.classList.remove('is-off');
+    field.classList.add('is-entering');
+    const landed = window.setTimeout(
+      () => field.classList.remove('is-entering'),
+      POP_MS + (STICKERS.length - 1) * POP_STAGGER,
+    );
+    return () => {
+      window.clearTimeout(landed);
+      field.classList.remove('is-entering');
+    };
+  }, [off]);
 
   /*
    * Tilt, ported from DongGukMon/TiltHologramCard. That component reads a
@@ -1292,6 +1355,12 @@ export function Stickers({
                 '--span': sticker.span,
                 // Staggered, so they leave as a handful rather than in lockstep.
                 '--sweep-delay': `${i * SWEEP_STAGGER}ms`,
+                // Its turn in the queue, in and out. Source order, which puts
+                // the three pieces of the name down first and the buttons last.
+                '--pop-delay': `${i * POP_STAGGER}ms`,
+                '--pop-ms': `${POP_MS}ms`,
+                '--drop-delay': `${i * DROP_STAGGER}ms`,
+                '--drop-ms': `${DROP_MS}ms`,
                 aspectRatio: String(sticker.ratio),
               } as React.CSSProperties
             }

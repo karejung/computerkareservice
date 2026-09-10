@@ -112,12 +112,6 @@ const FACE_MATERIAL = key('face.002');
 const LIT_MATERIALS = new Set([LIT_MATERIAL, FACE_MATERIAL]);
 
 const DS_POP = 0.26;
-/*
- * How long a prop takes to arrive when there is no clip under it — the blend
- * into her holding pose plus the pop itself. Only the star spiral needs the
- * number, to know how long it has to cover.
- */
-const BARE_ARRIVAL = FADE + DS_POP;
 const PUFF_COVER = 1.5;
 const REVEAL_DELAY = FADE;
 
@@ -319,37 +313,20 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
   const setMode = (next: KareMode): boolean => {
     if (next === mode.current) return false;
     const leaving = mode.current === 'idle' ? null : (mode.current as PropKind);
-
-    /*
-     * Empty-handed. The poof is a trick played on the thing already there, and
-     * with nothing there it is a flourish over an empty pair of hands — which
-     * is what the first pick-up of the session looked like. So the prop simply
-     * arrives: blend into the holding pose, pop it in, and let the star spiral
-     * be the whole of the event. `next` cannot be idle here, because reaching
-     * this line means she was already idle and the two differ.
-     */
-    if (!leaving) {
-      const arriving = next as PropKind;
-      if (pending.current || !propRoots.current[arriving]) return false;
-      reveal.current = null;
-      fadeTo(mode.current, arriving, FADE);
-      mode.current = arriving;
-      notify.current?.(arriving);
-      showProp(arriving);
-      popping.current = arriving;
-      dsPop.current = 0;
-      onSpinRef.current?.(BARE_ARRIVAL);
-      return true;
-    }
-
     const toIdle = next === 'idle';
+
     /*
-     * One clip both ways. Swapping props used to spin her and putting one down
-     * used to poof, which made the two halves of the same trick read as two
-     * different tricks — and the spin is the longer, showier of the two for the
-     * half whose job is to clear the old prop away.
+     * A clip per direction, chosen by where the device is going rather than by
+     * where it came from. Picking one up is the spin: she turns once and comes
+     * up holding it, which is the showier half and the half worth watching.
+     * Putting one down is the poof, a trick played on the thing already in her
+     * hands — and only ever that, since over empty hands it is a flourish over
+     * nothing. `toIdle` implies something is leaving, because reaching this
+     * line already empty-handed would mean `next` and `mode` were both idle.
      */
-    const seconds = oneShot('poof', next, FADE_TIGHT);
+    const seconds = toIdle
+      ? oneShot('poof', 'idle', FADE_TIGHT)
+      : oneShot('spin', next, FADE_TIGHT);
 
     if (!seconds) return false;
 
@@ -364,11 +341,10 @@ export const Kare = forwardRef<KareHandle, KareProps>(function Kare(
      * arriving. A prop vanishing needs covering; a prop arriving is the reveal
      * the clip has been building toward, and a burst on top of it hides the one
      * moment worth watching. So it fires at the top of the clip, over the prop
-     * this transition is clearing — the only reason there is a clip at all.
+     * this transition is clearing — and not at all when she started empty.
      */
-    puffAt(leaving, toIdle ? 'dismiss' : 'swap');
-    // The star spiral, still only for a prop arriving — named for the clip it
-    // used to accompany rather than for the one playing under it now.
+    if (leaving) puffAt(leaving, toIdle ? 'dismiss' : 'swap');
+    // The star spiral, only for a prop arriving: it covers the spin.
     if (!toIdle) onSpinRef.current?.(seconds);
     wink(seconds);
     return true;

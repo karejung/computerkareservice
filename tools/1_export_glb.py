@@ -10,7 +10,10 @@ Four things this has to get right, three of which fail silently:
 
   * `export_animation_mode='ACTIONS'` — the web app plays clips by name
     (idle / ds / PC / phone / spin / poof / Vsign). 'SCENE' collapses the lot
-    into one unnamed clip and the mixer then has nothing to look up.
+    into one unnamed clip and the mixer then has nothing to look up. Every
+    action in the file becomes a clip, including ones no object is using, so
+    the working copies a rig session leaves behind ship unless they are named
+    out of it — see BACKUP_SUFFIX.
   * `export_image_format='AUTO'` — forcing JPEG strips alpha. The blush is a
     four-vertex quad that is nothing but its alpha, and the web material reads
     emissiveMap, which came back opaque: magenta rectangles on her cheeks.
@@ -37,6 +40,13 @@ COLLECTIONS = ["body", "nintendo_low", "laptop", "phone"]
 LOWPOLY_COLLECTION = "nintendo_low"
 HIGHPOLY_ROOT = "Nintendo DS"
 LOWPOLY_ROOT = "ds_low"
+
+# Before-and-after copies kept in the .blend so a reworked clip can be reverted.
+# They are a rigging convenience and no object plays them, but 'ACTIONS' exports
+# every action regardless — two spare copies of the spin were 62 KB of JSON and
+# two clips the mixer would never look up. Dropped from this Blender's memory
+# only; the .blend on disk keeps them.
+BACKUP_SUFFIX = "_ORIG"
 
 os.makedirs(OUT, exist_ok=True)
 bpy.ops.wm.open_mainfile(filepath=BLEND)
@@ -95,6 +105,14 @@ else:
             f"{LOWPOLY_ROOT!r} missing and {HIGHPOLY_ROOT!r} is not the low-poly root"
         )
 report["console_root"] = HIGHPOLY_ROOT
+
+dropped = []
+for action in list(bpy.data.actions):
+    if action.name.endswith(BACKUP_SUFFIX):
+        dropped.append(action.name)
+        action.use_fake_user = False
+        bpy.data.actions.remove(action)
+report["dropped_actions"] = dropped
 
 for o in bpy.data.objects:
     o.select_set(False)
