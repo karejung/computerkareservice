@@ -406,37 +406,19 @@ html {
 }
 
 /*
- * The hologram is a port of DongGukMon/TiltHologramCard, which draws it in
- * Skia: perspective(500px) with rotateX/rotateY clamped to 15°, a rainbow ramp
- * masked by a moving light and composited in `overlay`, then a plain sheen over
- * the top.
+ * What is left of DongGukMon/TiltHologramCard, which this was ported from: the
+ * perspective(500px) and the rotateX/rotateY clamped to 15°. Its rainbow ramp
+ * and the sheen over the top are both gone, so a sticker is its artwork and the
+ * angle it is held at — a paper thing being tipped, rather than a foil one.
  *
- * Two departures. The reference masks with a holo_background PNG, which is left
- * out. And its light is a diagonal band — replaced here with a soft disc that
- * sits under the pointer, because a straight edge sweeping a die-cut shape
- * reads as a stripe laid over it rather than as light on it.
+ * The one light left is per-pixel and only on the sticker that has a normal map
+ * for it; see NormalLight.
  */
 .sticker {
   --lift: drop-shadow(0 1px 1px rgba(27, 28, 31, 0.1))
     drop-shadow(0 5px 8px rgba(27, 28, 31, 0.12));
-  /*
-   * Where the highlight rests: the top-right corner, matching the direction the
-   * 3D scene is lit from. Only the first paint uses these — components/Stickers
-   * owns the numbers (LIGHT_REST) and writes them from then on.
-   */
-  --gx: 78%;
-  --gy: 16%;
-  /*
-   * The drawn width, named so the holo and the glare can blur in proportion to
-   * it. Blurring by the old --sticker-scale instead had it backwards: it read
-   * 1.75 on a phone, where the stickers come out *smaller* in pixels than on a
-   * desktop, so they were getting twice the blur — which spread the sheen so
-   * thin it read as no light at all. --size is the pixels themselves, so it
-   * cannot get that wrong.
-   */
+  /* The drawn width, as pixels rather than as a fraction of anything. */
   --size: calc(var(--span) * var(--sticker-base));
-  --holo: 0.55;
-  --glare: 0.22;
 
   position: absolute;
   width: var(--size);
@@ -599,19 +581,6 @@ html {
 }
 
 /*
- * A gyro moves every sticker at once and by the same amount, so there is no
- * pointer sitting on one of them to say which one is being lit — the sheen has
- * to carry on its own. After the base rule, not with the other mobile override
- * above it: same specificity, so up there the desktop values would win.
- */
-@media (max-width: 700px) {
-  .sticker {
-    --holo: 0.8;
-    --glare: 0.34;
-  }
-}
-
-/*
  * On its way to the edge: slow, and with the overshoot of a spring rather than
  * a plain ease — the curve's control point sits above 1, so it carries past the
  * mark and settles back. Staggered, and nothing catches the pointer once it is
@@ -658,9 +627,7 @@ html {
 }
 
 .sticker__art,
-.sticker__lit,
-.sticker__holo,
-.sticker__glare {
+.sticker__lit {
   position: absolute;
   inset: 0;
 }
@@ -706,86 +673,6 @@ html {
 
 .sticker__lit--sheen {
   mix-blend-mode: screen;
-}
-
-/*
- * The rainbow, cut twice over: once to the sticker's silhouette and once to the
- * light. That second cut is the `mode="luminance"` mask in the original — a CSS
- * mask reads alpha rather than luminance, so the disc carries its brightness as
- * alpha and lands in the same place.
- */
-.sticker__holo {
-  -webkit-mask-image: var(--art),
-    radial-gradient(
-      circle at var(--gx) var(--gy),
-      rgba(255, 255, 255, 0.9) 0%,
-      rgba(255, 255, 255, 0.4) 32%,
-      rgba(255, 255, 255, 0) 68%
-    );
-  -webkit-mask-size: contain, 100% 100%;
-  -webkit-mask-position: center, center;
-  -webkit-mask-repeat: no-repeat, no-repeat;
-  -webkit-mask-composite: source-in;
-  mask-image: var(--art),
-    radial-gradient(
-      circle at var(--gx) var(--gy),
-      rgba(255, 255, 255, 0.9) 0%,
-      rgba(255, 255, 255, 0.4) 32%,
-      rgba(255, 255, 255, 0) 68%
-    );
-  mask-size: contain, 100% 100%;
-  mask-position: center, center;
-  mask-repeat: no-repeat, no-repeat;
-  mask-composite: intersect;
-  background-image: linear-gradient(
-    135deg,
-    #ff3b30,
-    #ff9500,
-    #ffcc00,
-    #4cd964,
-    #34aadc,
-    #5856d6,
-    #ff3b30
-  );
-  background-size: 200% 200%;
-  background-position: var(--gx) var(--gy);
-  /*
-   * Blur runs before masking in the CSS rendering model, so this softens the
-   * boundaries between the rainbow's stops without touching the silhouette the
-   * mask cuts — the edge stays as crisp as the artwork.
-   */
-  filter: blur(calc(var(--size) * 0.045));
-  opacity: var(--holo);
-  mix-blend-mode: overlay;
-  pointer-events: none;
-}
-
-/*
- * The plain sheen over the top, as a disc and kept faint.
- *
- * No blur, unlike the holo. The holo's is doing something — it rounds the
- * kinks where one hue in the rainbow hands over to the next — but a radial
- * gradient is already smooth, so blurring this one was a full-size raster pass
- * per sticker per frame in exchange for nothing anyone could see. It also
- * cannot have been softening the die-cut edge: filters run before masks, which
- * is why the holo's comment says the silhouette stays as crisp as the artwork.
- */
-.sticker__glare {
-  -webkit-mask-image: var(--art);
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-image: var(--art);
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  background-image: radial-gradient(
-    circle at var(--gx) var(--gy),
-    rgba(255, 255, 255, var(--glare)) 0%,
-    rgba(255, 255, 255, calc(var(--glare) * 0.36)) 34%,
-    rgba(255, 255, 255, 0) 66%
-  );
-  pointer-events: none;
 }
 
 /*
@@ -1232,6 +1119,15 @@ body:has(.hint) .custom-cursor {
   background: transparent;
   transform: translateX(-50%);
   transition: transform 140ms ease;
+  /*
+   * A tap on a phone was drawing a grey rectangle over the knob. Safari paints
+   * the tap highlight on the element the touch actually lands on — the knob,
+   * which is what fills most of the track — and on the box rather than on the
+   * border-radius, so a round knob came back square. Cleared here rather than
+   * globally: it is the only round thing small enough for the difference to
+   * show, and a highlight is the right feedback everywhere else.
+   */
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* The same give the zoom mark has, with the centring kept in front of it. */

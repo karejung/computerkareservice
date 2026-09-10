@@ -34,7 +34,7 @@ type Sticker = {
   ratio: number;
   /** Stickers that do something when tapped rather than only being moved. */
   action?: 'vsign';
-  /** A tangent-space normal map, lit per pixel by the same light as the holo. */
+  /** A tangent-space normal map, lit per pixel by the same light as the sheen. */
   normal?: string;
   /*
    * The tool this sticker belongs to. When Kare picks a tool up, the sticker
@@ -118,7 +118,7 @@ const STICKERS: Sticker[] = [
      * 64x71 around a 64px disc. This one was declared square and a span 72/64
      * larger, to correct for a 72px frame it does not have — which left the art
      * letterboxed in a box wider than itself, and everything measured off that
-     * box (the glare's gradient, both blurs) sized to the wrong circle.
+     * box sized to the wrong circle.
      */
     span: 0.075,
     ratio: 64 / 71,
@@ -256,12 +256,11 @@ const GYRO_GAIN = 0.6;
 /*
  * How much of each new orientation reading to believe, 0..1.
  *
- * A phone lying still still reports a degree or two of wander, and the light
- * disc is placed off those angles by LIGHT_SWING, so the raw signal put the
- * highlight in a slightly different place every single frame — which on a
- * layer whose brightness *is* its position reads as a flicker rather than as
- * movement. A one-pole low pass over the reading costs about six frames of lag
- * and takes the jitter down to roughly a third.
+ * A phone lying still still reports a degree or two of wander, and every
+ * sticker on the board is turned by it at once — so the raw signal reads as the
+ * whole page shivering rather than as anything being held. A one-pole low pass
+ * over the reading costs about six frames of lag and takes the jitter down to
+ * roughly a third.
  */
 const GYRO_EASE = 0.15;
 /** The same thing the other way round: hand degrees that reach the clamp. */
@@ -330,46 +329,15 @@ const inFlight = (node: HTMLElement) =>
   node.classList.contains('is-away') || node.classList.contains('is-settling');
 
 /*
- * Where the highlight sits when nothing is tipping the sticker, and how far it
- * travels from there, both in percent of the sticker's box.
- *
- * Top-right because that is where the 3D scene is lit from: LOOK.shadeAngle 44
- * and shadeHeight 30 give lib/twoTone.ts a uShadeDir of about (+0.60, +0.50,
- * +0.62) — positive x is screen right, positive y is up. The stickers sit in
- * the same room, so they catch the same light.
- *
- * The swing is centred on that rest point rather than on the middle of the
- * sticker, so the highlight drifts around the corner it lives in instead of
- * jumping to the centre the moment a pointer arrives.
- */
-const LIGHT_REST = { x: 78, y: 16 };
-const LIGHT_SWING = 30;
-/*
- * How close to the edge the highlight's centre may get, in percent of the
- * sticker's box. The swing is measured from a rest point already up in the
- * corner, so a full lean took the centre clean off the artwork — 108% across
- * and -14% down — leaving only the dim tail of the disc on the sticker. With a
- * pointer that is a corner of the hover range; with a gyro it is most of the
- * tilt range, which is why the light read as not moving at all on a phone.
- */
-const LIGHT_EDGE = 12;
-
-/** Keeps the highlight's centre on the artwork rather than off its corner. */
-const onSticker = (v: number) => Math.min(100 - LIGHT_EDGE, Math.max(LIGHT_EDGE, v));
-
-/*
  * Poses are quantised before they are written, and a node that already wears
  * the pose is not written to at all.
  *
- * Both matter more here than they would on a plain transform. The holo's mask
- * is a *generated image* — `radial-gradient(circle at var(--gx) var(--gy))` is
- * a different image at every position, so it is re-synthesised from scratch on
- * every write — and there is a full-size blur over it, and a blend under it.
- * So a write that moves the light by a twentieth of a pixel costs the same
- * repaint as one that moves it across the sticker, and the pointer path was
- * paying it for all eleven stickers on every mousemove: the ten the cursor is
- * nowhere near were being sent their unchanged resting pose, feColorMatrix
- * rewrite and all, at the mouse's polling rate.
+ * Both matter more here than they would on a bare transform, because the
+ * pointer path carries the relief with it: a write rebuilds two feColorMatrix
+ * rows and re-runs the filter over the sticker. The pointer was paying that for
+ * all ten stickers on every mousemove — the nine the cursor is nowhere near
+ * were being sent their unchanged resting pose, rewrite and all, at the mouse's
+ * polling rate.
  */
 const ANGLE_STEP = 0.1;
 const PULL_STEP = 0.002;
@@ -383,8 +351,7 @@ const REST_POSE = 'rest';
 
 /*
  * The rake of the resting light, in screen terms: up and to the right, the same
- * corner the holographic highlight rests in and the same side the 3D scene is
- * lit from. Without it a sticker at rest would have the light dead-on, and
+ * corner the sheen rests in and the same side the 3D scene is lit from. Without it a sticker at rest would have the light dead-on, and
  * dead-on light casts no relief at all.
  */
 const LIGHT_BIAS = { x: 0.55, y: -0.55 };
@@ -859,62 +826,60 @@ export function Stickers({
 
   /*
    * Tilt, ported from DongGukMon/TiltHologramCard. That component reads a
-   * gyroscope; the web has two inputs and they want different treatment:
+   * gyroscope; the web has two inputs and they no longer do the same work:
    *
    *   pointer — hover gives a per-sticker angle, the card leaning toward the
-   *             cursor, which is what a mouse can express and a gyro cannot.
-   *   gyro    — no hover on a phone, so device orientation drives every sticker
-   *             at once, off a baseline taken from the first reading rather
-   *             than a guess at how the phone is being held.
+   *             cursor, plus the magnet that slides it that way and the relief
+   *             on whichever sticker carries a normal map. A mouse is aimed at
+   *             one sticker, so it can light one.
+   *   gyro    — the angle, and nothing else. It moves every sticker at once and
+   *             by the same amount, off a baseline taken from the first reading
+   *             rather than a guess at how the phone is being held. A light
+   *             that every sticker on the board answers identically is a filter
+   *             over the page rather than anything falling on them, so the tilt
+   *             is the whole of what the phone gets.
    *
-   * Both end up writing the same four custom properties, and the CSS in
-   * globals.css does not care which one moved them.
-   */
-  /*
-   * The stickers stay flat — no perspective, no rotateX/rotateY. The angles are
-   * still what drives the light, because that is how the reference positions
-   * its gradient, but they are consumed here rather than written out as a 3D
-   * transform.
+   * `pull` is what tells the two apart — the pointer has somewhere to lean the
+   * sticker toward and the gyro does not.
    */
   const tilt = (node: HTMLElement, rx: number, ry: number, pull?: { x: number; y: number }) => {
     /*
      * Quantised up front rather than at each write, so that everything below —
-     * the angles, the magnet, the light and both feColorMatrix rows — is a
-     * function of the same rounded pair and the pose either differs from the
-     * one already on the node or is skipped whole. A tenth of a degree and a
-     * five-hundredth of a half-width are both well under a pixel at the size
-     * these are drawn.
+     * the angles, the magnet and both feColorMatrix rows — is a function of the
+     * same rounded pair and the pose either differs from the one already on the
+     * node or is skipped whole. A tenth of a degree and a five-hundredth of a
+     * half-width are both well under a pixel at the size these are drawn.
      */
     const qx = quantise(rx, ANGLE_STEP);
     const qy = quantise(ry, ANGLE_STEP);
-    const px = pull ? quantise(pull.x, PULL_STEP) : 0;
-    const py = pull ? quantise(pull.y, PULL_STEP) : 0;
+
+    if (!pull) {
+      const pose = `gyro ${qx} ${qy}`;
+      if (poses.get(node) === pose) return;
+      poses.set(node, pose);
+      node.style.setProperty('--rx', `${qx}deg`);
+      node.style.setProperty('--ry', `${qy}deg`);
+      return;
+    }
+
+    const px = quantise(pull.x, PULL_STEP);
+    const py = quantise(pull.y, PULL_STEP);
 
     /*
-     * Centre of the highlight, -1..1 across the sticker. The reference slides a
-     * 200% band by this; here it is a disc, so the same number is its position
-     * rather than an offset. The pointer knows where it is directly, and a gyro
-     * reading only has angles, so that path normalises them back.
+     * Where the light is coming from, -1..1 across the sticker. Negated: this
+     * is a reflection, so it comes from away from whatever is tipping the
+     * sticker rather than pooling under it.
      */
-    // Negated: this is a reflection, so it slides away from whatever is tipping
-    // the sticker rather than pooling under it.
-    const lx = pull ? -px : -qy / MAX_TILT_ANGLE;
-    const ly = pull ? -py : qx / MAX_TILT_ANGLE;
-
-    const shade = shadeMatrix(lx, ly);
-    const sheen = sheenMatrix(lx, ly);
-    const pose = `${qx} ${qy} ${px} ${py} ${pull ? 1 : 0} ${shade}`;
+    const shade = shadeMatrix(-px, -py);
+    const sheen = sheenMatrix(-px, -py);
+    const pose = `${qx} ${qy} ${px} ${py} ${shade}`;
     if (poses.get(node) === pose) return;
     poses.set(node, pose);
 
     node.style.setProperty('--rx', `${qx}deg`);
     node.style.setProperty('--ry', `${qy}deg`);
-    // Only the pointer has somewhere to be pulled toward; a gyro reading does
-    // not, so the sticker stays put and only tilts.
-    node.style.setProperty('--mx', pull ? `${px * MAGNET}%` : '0%');
-    node.style.setProperty('--my', pull ? `${py * MAGNET}%` : '0%');
-    node.style.setProperty('--gx', `${onSticker(LIGHT_REST.x + lx * LIGHT_SWING)}%`);
-    node.style.setProperty('--gy', `${onSticker(LIGHT_REST.y + ly * LIGHT_SWING)}%`);
+    node.style.setProperty('--mx', `${px * MAGNET}%`);
+    node.style.setProperty('--my', `${py * MAGNET}%`);
 
     node.querySelector('.sticker__lit--shade feColorMatrix')?.setAttribute('values', shade);
     node.querySelector('.sticker__lit--sheen feColorMatrix')?.setAttribute('values', sheen);
@@ -929,8 +894,6 @@ export function Stickers({
     node.style.removeProperty('--ry');
     node.style.removeProperty('--mx');
     node.style.removeProperty('--my');
-    node.style.setProperty('--gx', `${LIGHT_REST.x}%`);
-    node.style.setProperty('--gy', `${LIGHT_REST.y}%`);
 
     node
       .querySelector('.sticker__lit--shade feColorMatrix')
@@ -1021,8 +984,8 @@ export function Stickers({
      * The event only records where the cursor is; the frame does the work. A
      * mouse reports faster than the screen redraws — often twice per frame, and
      * a trackpad more than that — and every one of those reports was repainting
-     * the holo's generated mask and the blur over it. Coalescing to one pose
-     * per frame throws away nothing anyone could have seen.
+     * the sheen's generated gradient. Coalescing to one pose per frame throws
+     * away nothing anyone could have seen.
      */
     const move = (e: PointerEvent) => {
       if (e.pointerType !== 'mouse') return;
@@ -1097,10 +1060,10 @@ export function Stickers({
        * the point where the tilt clamps. Its first value is whatever angle the
        * phone happened to be at when the page loaded — flat on a desk, say —
        * and a hand that then settles somewhere else is permanently outside the
-       * range: the tilt sticks at 15 degrees and the highlight sits parked off
-       * the artwork's corner, which is exactly "only the tilt moves and the
-       * light never shows". Inside the range the baseline does not move, so a
-       * phone held normally still has a stable rest orientation.
+       * range: every sticker on the board sticks at 15 degrees and stays there,
+       * so the tilt reads as a fixed slant rather than as something answering
+       * the phone. Inside the range the baseline does not move, so a phone held
+       * normally still has a stable rest orientation.
        */
       base.beta += db - Math.min(GYRO_SPAN, Math.max(-GYRO_SPAN, db));
       base.gamma += dg - Math.min(GYRO_SPAN, Math.max(-GYRO_SPAN, dg));
@@ -1376,8 +1339,6 @@ export function Stickers({
                 <NormalLight sticker={sticker} mode="sheen" values={sheenMatrix(0, 0)} />
               </>
             )}
-            <div className="sticker__holo" />
-            <div className="sticker__glare" />
           </div>
         );
       })}
