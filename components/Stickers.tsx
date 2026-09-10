@@ -626,6 +626,13 @@ export function Stickers({
    */
   const [markup, setMarkup] = useState<Record<string, string>>({});
   /*
+   * Whether the fetches above have come back — all of them, however they went.
+   * Not `markup` being non-empty: a board whose files all failed would then wait
+   * for artwork that is never coming and never show at all, and the stickers are
+   * still draggable shapes without it.
+   */
+  const [fetched, setFetched] = useState(false);
+  /*
    * The id of the sticker the label is for, or null — the id rather than the
    * label itself, because the chip needs to know more about it than what it
    * says: whether it links anywhere, which is what earns the arrow.
@@ -650,7 +657,9 @@ export function Stickers({
           .catch(() => [sticker.id, ''] as const),
       ),
     ).then((pairs) => {
-      if (live) setMarkup(Object.fromEntries(pairs.filter(([, m]) => m)));
+      if (!live) return;
+      setMarkup(Object.fromEntries(pairs.filter(([, m]) => m)));
+      setFetched(true);
     });
     return () => {
       live = false;
@@ -786,10 +795,6 @@ export function Stickers({
       write(sticker.id);
     }
 
-    // Everything has somewhere to be now, so let them be seen. What they do on
-    // the way in is the next effect's, which runs after this one and again
-    // every time the switch moves.
-    field?.classList.add('is-placed');
   }, []);
 
   /*
@@ -799,12 +804,19 @@ export function Stickers({
    * the full stagger late, so that is when the trip is over.
    *
    * `is-off` is the opposite and stays on, since being gone is a state rather
-   * than a trip. Declared after the scatter so it runs after it on the mount
-   * they share, which is what puts the first bounce on placed stickers.
+   * than a trip.
+   *
+   * `is-placed` is added here rather than by the scatter, even though that is
+   * what does the placing, because it is also what un-hides them: waiting on
+   * the artwork means the board bounces in with something in it. The fetches
+   * resolve in a few hundred ms on a desktop and the loader covered the gap, so
+   * on the way in the stickers were bouncing empty and filling in afterwards —
+   * or, on a phone, mid-bounce.
    */
   useEffect(() => {
     const field = layer.current;
-    if (!field) return;
+    if (!field || !fetched) return;
+    field.classList.add('is-placed');
 
     if (off) {
       field.classList.remove('is-entering');
@@ -822,7 +834,7 @@ export function Stickers({
       window.clearTimeout(landed);
       field.classList.remove('is-entering');
     };
-  }, [off]);
+  }, [off, fetched]);
 
   /*
    * Tilt, ported from DongGukMon/TiltHologramCard. That component reads a

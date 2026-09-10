@@ -488,9 +488,26 @@ html {
 }
 
 @keyframes sticker-pop {
+  /*
+   * Half size and transparent, rather than scaled to nothing.
+   *
+   * Three of these files carry Figma inner shadows, which are SVG <filter>
+   * elements, and a filter is rasterised offscreen before it is composited. At
+   * scale 0 that raster has no pixels in it — and on iOS the empty result was
+   * being kept and reused for the rest of the trip, so the sticker arrived as
+   * whatever part of it is not filtered: a background with nothing on it. There
+   * is nothing to see at 0.5 either, since the opacity is doing the appearing,
+   * but there is something to rasterise.
+   */
   0% {
-    --pop-x: 0;
-    --pop-y: 0;
+    --pop-x: 0.5;
+    --pop-y: 0.5;
+
+    opacity: 0;
+  }
+
+  16% {
+    opacity: 1;
   }
 
   /* Overshoots the mark on the way out, the way a thing thrown down does. */
@@ -547,10 +564,14 @@ html {
   pointer-events: none;
 }
 
+/* Down to exactly where `sticker-pop` starts, so switching back on continues
+   from here rather than stepping to a different size first. */
 @keyframes sticker-drop {
   to {
-    --pop-x: 0;
-    --pop-y: 0;
+    --pop-x: 0.5;
+    --pop-y: 0.5;
+
+    opacity: 0;
   }
 }
 
