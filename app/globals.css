@@ -635,10 +635,11 @@ html {
 }
 
 /*
- * A press that has been held long enough to count as a click. Touch only —
- * there is no click to wait for on a mouse — and it has to say so before the
- * finger lifts, because lifting is what spends it. Picked up off the ground
- * rather than pushed into it: the same lift .is-held gives, further.
+ * Tapped once, and waiting for the tap that opens it. Touch only — there is no
+ * second tap to wait for on a mouse — and it has to say so while the finger is
+ * still there, since the label alone goes up on every tapped sticker and this
+ * is what marks the ones with somewhere to go. Picked up off the ground rather
+ * than pushed into it: the same lift .is-held gives, further.
  */
 .sticker.is-armed {
   --lift: drop-shadow(0 3px 3px rgba(27, 28, 31, 0.14))

@@ -270,12 +270,14 @@ const MAGNET = 6;
 /** Pointer travel, in px, under which a press counts as a tap and not a drag. */
 const CLICK_SLOP = 5;
 /*
- * How long a finger has to stay down for the press to count as a click.
  * A touch screen has one gesture where a mouse has two, so the two are spread
- * over time instead: tap does what hover does, press-and-hold does what click
- * does. 450ms is about where a hold stops reading as a slow tap.
+ * over two taps: the first does what hover does, the second does what click
+ * does. It used to be spread over *time* instead — a press held past 450ms was
+ * the click — which asks the reader to discover a duration, and to keep a
+ * finger still for it on a sticker whose whole affordance is that it can be
+ * dragged. A second tap is the gesture a phone already teaches, and the label
+ * the first tap raises is there to say another one will open something.
  */
-const LONG_PRESS = 450;
 /*
  * The label is the cursor while it is up, so it centres on the pointer rather
  * than hanging off it — which also means there is nothing to flip or clamp at
@@ -644,6 +646,11 @@ export function Stickers({
    * A mouse label is placed on every pointermove and centres on the cursor; a
    * tapped one has no cursor to centre on and a finger sitting on top of it,
    * so it is placed once, off the sticker's own box.
+   *
+   * It is also what makes a sticker primed: the one holding the tapped label is
+   * the one a second tap acts on. So whatever puts the label away — a tap
+   * elsewhere, a drag, a sweep — takes the priming with it, and there is only
+   * ever one sticker on the board waiting for its second tap.
    */
   const hintFor = useRef<string | null>(null);
 
@@ -821,6 +828,14 @@ export function Stickers({
     if (off) {
       field.classList.remove('is-entering');
       field.classList.add('is-off');
+      /*
+       * The tapped label goes with the board, and the priming it stands for
+       * with it. The chip is portalled to the body rather than held in the
+       * layer, so `is-off` does not take it: it would be left on screen naming
+       * a sticker that is no longer there, and the sticker would come back
+       * still primed, a single tap from opening something.
+       */
+      dismiss(hintFor.current ? nodes.current.get(hintFor.current) : null);
       return;
     }
 
@@ -902,6 +917,10 @@ export function Stickers({
     poses.set(node, REST_POSE);
 
     node.classList.remove('is-tilting');
+    // A sticker at rest is not primed for a second tap either. Safe to leave
+    // under the guard above: priming always writes a lean, so a primed sticker
+    // is never already wearing the resting pose.
+    node.classList.remove('is-armed');
     node.style.removeProperty('--rx');
     node.style.removeProperty('--ry');
     node.style.removeProperty('--mx');
@@ -913,6 +932,19 @@ export function Stickers({
     node
       .querySelector('.sticker__lit--sheen feColorMatrix')
       ?.setAttribute('values', sheenMatrix(0, 0));
+  };
+
+  /*
+   * Put the tapped label away, and with it the priming it stands for: the two
+   * are one state read from either end, so nothing may drop one and keep the
+   * other. The node is optional because a sticker dragged out from under its
+   * own label keeps the lean it is being dragged by — everywhere else the
+   * label goes, the lean goes with it.
+   */
+  const dismiss = (node?: HTMLElement | null) => {
+    if (node) rest(node);
+    hintFor.current = null;
+    setHint(null);
   };
 
   /*
@@ -1129,9 +1161,7 @@ export function Stickers({
       if (e.pointerType === 'mouse' || !hintFor.current) return;
       const node = nodes.current.get(hintFor.current);
       if (node && e.target instanceof Node && node.contains(e.target)) return;
-      if (node) rest(node);
-      hintFor.current = null;
-      setHint(null);
+      dismiss(node);
     };
     window.addEventListener('pointerdown', away);
     return () => window.removeEventListener('pointerdown', away);
@@ -1180,6 +1210,12 @@ export function Stickers({
 
       // Tilt state has to go with it, or the transition it suppresses never runs.
       rest(node);
+      /*
+       * And the label, if this is the one holding it: a sticker on its way to
+       * the edge is not being read, and coming back still primed would leave a
+       * single tap opening a link nobody had aimed at yet.
+       */
+      if (hintFor.current === sticker.id) dismiss();
       const toX = (at.x < 0.5 ? SWEEP_EDGE : 1 - SWEEP_EDGE) - at.x;
       const toY = (at.y < 0.5 ? SWEEP_EDGE : 1 - SWEEP_EDGE) - at.y;
       node.style.setProperty('--sx', `calc(${toX} * (100vw - 2 * var(--gutter)))`);
@@ -1218,17 +1254,22 @@ export function Stickers({
     let travelled = 0;
 
     /*
-     * Touch gets both desktop gestures out of one finger. A tap stands in for
-     * hover — the same lean, the same light, the same label — and only a press
-     * held past LONG_PRESS stands in for a click.
+     * Touch gets both desktop gestures out of one finger, over two taps. The
+     * first stands in for hover — the same lean, the same light, the same label
+     * — and leaves the sticker primed; a tap on a sticker that is already
+     * primed stands in for the click.
      *
-     * The timer only arms it; the act itself waits for the release, because
-     * window.open outside a user gesture is what a phone browser blocks. So
-     * the hold says "this has taken" and lifting is what spends it.
+     * Primed is read off the label rather than kept in its own flag: the
+     * sticker holding the tapped label is the one that has been tapped once and
+     * not since let go of, which is exactly the condition. Read before the tap
+     * below claims the label, or every first tap would look like a second.
+     *
+     * Either way the act waits for the release, because window.open outside a
+     * user gesture is what a phone browser blocks — and because a press that
+     * turns into a drag is a drag whichever tap it is.
      */
     const touch = e.pointerType !== 'mouse';
-    let armed = false;
-    let arming = 0;
+    let primed = touch && hintFor.current === sticker.id;
 
     if (touch) {
       for (const [id, other] of nodes.current) {
@@ -1238,18 +1279,20 @@ export function Stickers({
       leanToward(node, e.clientX, e.clientY);
       setHint(sticker.label ? sticker.id : null);
 
-      arming = window.setTimeout(() => {
-        armed = true;
-        arming = 0;
+      /*
+       * Said on the way down, so the lift lands under the finger that asked for
+       * it rather than after it leaves. Only where a second tap has something
+       * to spend itself on: a sticker that is purely draggable is never primed,
+       * and a board that buzzes at every tap says nothing by buzzing.
+       */
+      if (!primed && (sticker.href || sticker.action)) {
         node.classList.add('is-armed');
         navigator.vibrate?.(8);
-      }, LONG_PRESS);
+      }
     }
 
-    const disarm = () => {
-      if (arming) window.clearTimeout(arming);
-      arming = 0;
-      armed = false;
+    const unprime = () => {
+      primed = false;
       node.classList.remove('is-armed');
     };
 
@@ -1258,16 +1301,14 @@ export function Stickers({
       if (!next) return;
       travelled = Math.max(travelled, Math.hypot(move.clientX - startX, move.clientY - startY));
       /*
-       * Once it is being dragged it is not being read: the hold stops counting
-       * toward a click and the label goes, the same way a mouse label goes when
-       * the cursor leaves.
+       * Once it is being dragged it is not being read: the priming goes and the
+       * label with it, the same way a mouse label goes when the cursor leaves.
+       * So a sticker moved across the board lands unprimed, and the tap that
+       * opens it is one the reader aimed rather than the end of a drag.
        */
       if (touch && travelled >= CLICK_SLOP) {
-        disarm();
-        if (hintFor.current === sticker.id) {
-          hintFor.current = null;
-          setHint(null);
-        }
+        unprime();
+        if (hintFor.current === sticker.id) dismiss();
       }
       const field = layer.current;
       const w = field?.clientWidth || window.innerWidth;
@@ -1285,19 +1326,32 @@ export function Stickers({
        * would fire whatever it does.
        */
       const tapped = end.type === 'pointerup' && travelled < CLICK_SLOP;
-      // On touch the tap has already been spent on the hover, so only a press
-      // that armed goes on to act.
-      const acts = tapped && (!touch || armed);
-      disarm();
-      if (acts && sticker.action === 'vsign') onVsign?.();
-      if (acts && sticker.href) {
+      // On touch the first tap is spent on the hover, so only one landing on a
+      // sticker that tap primed goes on to act.
+      const acts = tapped && (!touch || primed);
+      /*
+       * Nothing is unprimed here. A first tap ends on this line with its lift
+       * and its label still on, which is the whole of what it has to say: the
+       * next tap opens this. Only a drag takes that back, and it does it where
+       * it happens rather than on the way out.
+       */
+      if (acts) {
         /*
-         * mailto: through window.open(_blank) leaves an empty tab behind the
-         * mail client. Assigning it on this window is what the protocol is
-         * for — the page stays put, the composer opens.
+         * Spent: the label goes and the lean with it. Otherwise the sticker
+         * sits primed behind the tab it just opened, and the tap that comes
+         * back to the board opens it a second time.
          */
-        if (sticker.href.startsWith('mailto:')) window.location.assign(sticker.href);
-        else window.open(sticker.href, '_blank', 'noopener');
+        if (touch) dismiss(node);
+        if (sticker.action === 'vsign') onVsign?.();
+        if (sticker.href) {
+          /*
+           * mailto: through window.open(_blank) leaves an empty tab behind the
+           * mail client. Assigning it on this window is what the protocol is
+           * for — the page stays put, the composer opens.
+           */
+          if (sticker.href.startsWith('mailto:')) window.location.assign(sticker.href);
+          else window.open(sticker.href, '_blank', 'noopener');
+        }
       }
       node.removeEventListener('pointermove', drag);
       node.removeEventListener('pointerup', drop);
